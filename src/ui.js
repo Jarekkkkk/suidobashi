@@ -230,7 +230,7 @@ function actionFor(kind, body) {
       script: 'node src/hire-agent.js --allowlist',
       env: { HIRE: body.hire, VENUE: venue, ALLOW: allow ? 'true' : 'false' },
       proposal: {
-        action: allow ? 'open venue' : 'close venue',
+        action: allow ? 'allow swap pool' : 'block swap pool',
         hire: body.hire,
         venue,
       },
@@ -569,11 +569,14 @@ const PAGE = `<!doctype html>
   <span class="grp">budget <select id="budHire"></select>
     <input id="budAmt" type="text" value="0.03"> SUI
     <button class="ghost" id="setBud">Set</button></span>
-  <span class="grp">venue <select id="venHire"></select>
-    <button class="ghost" id="venOpen">Open</button>
-    <button class="ghost" id="venClose">Close</button></span>
+  <span class="grp">swap pool <select id="poolHire"></select>
+    <button class="ghost" id="poolAllow">Allow</button>
+    <button class="ghost" id="poolBlock">Block</button></span>
   <span class="grp"><button class="ghost" id="withdraw">Withdraw all</button></span>
-  <div class="legend">each of these asks the wallet to sign — nothing is signed by this page.</div>
+  <div class="legend">each of these asks the wallet to sign — nothing is signed by this page.
+    <b>swap pool</b> is the Cetus pool a hire may trade on: it edits the policy's allowlist, and a
+    new hire starts with none allowed. It does not stop the agent — use <b>Suspend</b> on the hire
+    below for that.</div>
   <div class="msg" id="ownerMsg"></div>
 </div>
 

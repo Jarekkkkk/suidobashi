@@ -240,16 +240,22 @@ function validate(intent, amountMist, { vaultSuiMist, text, hire, policy }) {
           `${intent.from || '(none)'} -> ${intent.to || '(none)'}`,
       };
     }
-    // The hire must actually be allowed on its venue. Checked here rather than
-    // left to the chain so a request routed to an unopened hire is refused for
-    // the right reason, cheaply, instead of aborting EPoolNotAllowed later.
+    // The hire's swap pool must be allowed. Checked here rather than left to the
+    // chain so a request routed to a hire whose pool is blocked is refused for the
+    // right reason, cheaply, instead of aborting EPoolNotAllowed later.
     if (policy && !policy.venueOpen) {
+      const others = policy.venueCount ?? 0;
       return {
         ok: false,
         reason:
-          `the ${hire.name} hire is not allowlisted on its venue ` +
-          `(${hire.venue.feeBps / 100}% pool) — its allowlist holds ${policy.venueCount ?? '?'} pool(s). ` +
-          'Open the venue first.',
+          `the ${hire.name} hire's swap pool is not allowed ` +
+          `(the ${hire.venue.feeBps / 100}% Cetus pool)` +
+          (others === 0
+            // Distinguishing these two matters: an empty allowlist is the normal
+            // state of a new hire, so it should say so rather than read as a fault.
+            ? ' — its allowlist is empty, which is how a new hire starts.'
+            : ` — its allowlist holds ${others} other pool(s).`) +
+          ' Allow the pool first.',
       };
     }
     // The direction matches what we support — but did the request actually say so?

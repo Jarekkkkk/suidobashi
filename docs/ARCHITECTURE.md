@@ -206,6 +206,47 @@ Consequences:
 - cycle order is **open → fund → rebalance → exit**, and `exit` is terminal for
   that guard
 
+## Controls — which one touches what
+
+Four controls stop or move things, and they act on **different layers**. Two of them
+used to share the word "close", which is why this table exists.
+
+| control | on-chain call | what it changes | value moves | reversible |
+| --- | --- | --- | --- | --- |
+| **Suspend** (per hire) | `policy::set_suspended` | flips the kill switch | no | yes |
+| **swap pool** Allow / Block | `policy::set_pool_allowed` | adds or removes a pool from `allowed_pools` | no | yes |
+| **Exit** (position) | `position_guard::redeem_with_rewards` | removes liquidity, collects fees, calls `cetus_pool::close_position` — destroys the position object | **yes** — LP capital → destination | no — terminal for that guard |
+| **Withdraw all** | `spend_vault::withdraw` | moves SUI out of the vault | **yes** — vault → owner | yes — Fund puts it back |
+
+**The two piles of money are separate.**
+
+```text
+VAULT     the agent's spending budget. What a swap draws from. Owner custody.
+POSITION  LP capital, managed by the guard on a Cetus pool. A different asset.
+
+A swap spends from the vault. A rebalance moves the position's range.
+Exiting the position does NOT free the vault funds, and withdrawing the vault does
+NOT touch the position.
+```
+
+**What each control does not do**, which is the part that produces wrong mental
+models:
+
+```text
+Suspend        stops everything for that hire, instantly. The only full stop.
+swap pool      narrows which pools may be traded. Does NOT stop the agent -- if
+               another pool is allowed, it can still trade there.
+Exit           liquidates the LP position only. The vault is untouched.
+Withdraw all   empties the vault only. The position is untouched.
+```
+
+**A new hire starts with an empty allowlist** — `hire-agent.js` states it plainly —
+so no swap works until a pool is allowed. That is why `swap pool` is not optional
+polish: without it, every swap from that hire fails with `EPoolNotAllowed`.
+
+The allowlist is consulted in exactly one place, `swap_and_route`. It gates swaps
+and nothing else.
+
 ## Trust boundaries
 
 | component | trusted for | NOT trusted for |

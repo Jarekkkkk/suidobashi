@@ -55,17 +55,17 @@ async function loadHires() {
         : h.suspended
           ? html`<span class="bad">SUSPENDED</span>`
           : html`<span class="ok">active</span>`;
-      const venue = h.error
+      const pool = h.error
         ? '?'
-        : html`<span class="${h.ownVenueOpen ? 'ok' : 'warn'}">${h.feeBps / 100}% pool${h.ownVenueOpen ? ' \u2713' : ' not open'}</span>`;
+        : html`<span class="${h.ownVenueOpen ? 'ok' : 'warn'}">${h.feeBps / 100}% pool${h.ownVenueOpen ? ' \u2713 allowed' : ' blocked'}</span>`;
       return html`<div class="hire${h.suspended ? ' off' : ''}">
         <b>${h.name}</b>
         <span class="k" title="local record; the real cap is in the OZ ledger">budget ${h.budgetSui} local</span>
-        <span class="k">${venue}</span>
+        <span class="k">${pool}</span>
         ${state}
         ${h.error ? '' : html`<button class="ghost" data-hire="${h.name}" data-next="${h.suspended ? 'false' : 'true'}">${h.suspended ? 'Resume' : 'Suspend'}</button>`}
       </div>`;
-    })}<div class="legend">venue, suspension and allowlist are read from the chain; budget figures are local records — the cap itself is enforced in the OZ ledger.</div>`);
+    })}<div class="legend">the swap pool allowlist and suspension are read from the chain; budget figures are local records — the cap itself is enforced in the OZ ledger.</div>`);
     for (const b of $('hires').querySelectorAll('button')) {
       b.onclick = () => toggleHire(b.dataset.hire, b.dataset.next === 'true', b);
     }
@@ -220,7 +220,7 @@ loadHires();
 // typed text into the integer a transaction carries, and it deserves its own test.
 
 function fillHireSelects(list) {
-  for (const id of ['budHire', 'venHire']) {
+  for (const id of ['budHire', 'poolHire']) {
     const sel = $(id);
     if (!sel) continue;
     const keep = sel.value;
@@ -285,8 +285,8 @@ $('setBud').onclick = () => {
   ownerAction('budget', { hire: $('budHire').value, amountMist: mist });
 };
 
-$('venOpen').onclick = () => ownerAction('venue', { hire: $('venHire').value, allow: true });
-$('venClose').onclick = () => ownerAction('venue', { hire: $('venHire').value, allow: false });
+$('poolAllow').onclick = () => ownerAction('venue', { hire: $('poolHire').value, allow: true });
+$('poolBlock').onclick = () => ownerAction('venue', { hire: $('poolHire').value, allow: false });
 
 // The route back to custody, and the step that must run before a package upgrade.
 // No amount field: the operation that matters is emptying the vault.

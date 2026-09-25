@@ -1,16 +1,15 @@
 /*
- * One runnable check for the page's escaping.
+ * One runnable check for the page: escaping, amount parsing, and element bindings.
  *
  * src/web/markup.js is security relevant: values arriving from the chain and from
  * hire names are interpolated into markup, so if `html` ever stops escaping, or
  * `setHtml` ever stops escaping raw input, those values become script injection.
- * This is the smallest thing that fails if that breaks.
- *
- * It imports the real module rather than duplicating or evaluating the helpers, so
- * what is tested is exactly what the browser is served.
+ * src/web/units.js decides the integer a transaction carries. Both are imported
+ * rather than duplicated, so what is tested is what the browser is served.
  *
  *   bun run src/verify-page.js
  */
+import fs from 'node:fs';
 import { esc, html, setHtml } from './web/markup.js';
 import { suiToMist, toUnits, usdcToUnits } from './web/units.js';
 
@@ -115,8 +114,28 @@ check('6 and 9 decimals are not interchangeable', usdcToUnits('0.5') !== suiToMi
 check('toUnits honours its decimals argument', toUnits('1', 2) === '100' && toUnits('1', 0) === '1',
   `${toUnits('1', 2)} / ${toUnits('1', 0)}`);
 
+// 9. Element bindings. page.js looks elements up by id; ui.js's template creates
+//    them. A mismatch yields null, and a null at module load THROWS -- so no handler
+//    attaches anywhere and every button on the page does nothing. That is exactly how
+//    this project's first bug presented itself, and nothing else checks for it.
+const uiSource = fs.readFileSync('src/ui.js', 'utf8');
+const pageSource = fs.readFileSync('src/web/page.js', 'utf8');
+
+const declared = new Set([
+  // ids in the served page template
+  ...[...uiSource.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]),
+  // ids page.js creates itself, e.g. the wallet connect/disconnect buttons
+  ...[...pageSource.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]),
+]);
+const looked = [...pageSource.matchAll(/\$\('([^']+)'\)/g)].map((m) => m[1]);
+const missing = [...new Set(looked)].filter((id) => !declared.has(id));
+
+check('every element the page looks up exists in the markup', missing.length === 0,
+  `nothing declares id="${missing.join('", nothing declares id="')}"`);
+check('the check found bindings to verify', looked.length >= 8, `found ${looked.length}`);
+
 if (failures) {
   console.error(`\n${failures} check(s) failed.`);
   process.exit(1);
 }
-console.log('page escaping: all checks passed');
+console.log('page: all checks passed');
