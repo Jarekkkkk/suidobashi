@@ -20,10 +20,11 @@ change, so nothing is lost by doing it now and adding the second back later.
 
 1. It costs **no Move work** — the model already supports it (one policy per agent
    address, one cap per policy, one allowance per cap).
-2. It makes the access-control claim **demonstrable rather than unit-tested**. Today
-   `agent == owner`, so `ENotAgent` and `ESuspended` have never fired on chain — the
-   gates pass their Move unit tests, but no separate caller has ever been refused on
-   mainnet.
+2. It makes the access-control claim **demonstrable rather than unit-tested**. While
+   `agent == owner` no call can be refused as the wrong caller, so `ENotAgent` passes
+   its Move unit tests while never being exercised on chain. **DONE** — the grant was
+   handed to the swap server's address and a call from the owner's address now aborts
+   on mainnet with `ENotAgent`.
 3. Everything downstream assumes it: the manifest declares `publisher.agent`, the
    grant binds to that address, and the caller gate is the thing being sold.
 
@@ -154,11 +155,13 @@ deposit · atomic rebalance with rewards collected · redeem · `EPoolNotAllowed
 the wrong venue · owner actions from the UI · the full position cycle driven from
 the UI with wallet signing.
 
-**Not proven: owner/agent separation.** The gates are asserted by Move unit tests
-(`non_agent_aborts`, `suspended_policy_aborts`, bounds, binding, rotation). What has
-never happened is a mainnet refusal against a genuinely separate caller: every
-agent-path proof was signed by an address that is *both* owner and agent. The
-separation is the product; it is unit-tested, not demonstrated.
+**Demonstrated: owner/agent separation.** `ENotAgent` aborts on mainnet against a
+separate caller — a swap from the owner's address against a policy whose agent is
+someone else is refused on chain. Getting there took a deliberate migration, because
+while agent and owner are the same address the gate cannot fire.
+
+**Still unit-tested only:** `ESuspended`, and the slippage bound — the bound needs the
+agent's key to exercise, and the agent has no software yet.
 
 **Also not proven:** a third-party MCP server returning bytes (designed, not
 built), and cron/interval execution.

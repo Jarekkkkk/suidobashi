@@ -182,7 +182,8 @@ polish.
 
 ## Per-server agent identity
 
-**Status:** **recommended, not implemented.** Cheapest first move.
+**Status:** **implemented.** `hire-agent.js --repoint` hands a grant to a different
+address and sets its price bound in one transaction.
 
 **Decision.** Each MCP server is its own agent address. The policy's `agent` is
 that address. The OwnerCap never leaves the device.
@@ -191,16 +192,20 @@ that address. The OwnerCap never leaves the device.
 agent address, one cap per policy, one allowance per cap. Issuing one policy per
 MCP server is a **configuration** change, not a contract change.
 
-**Why it matters more than it looks.** Today `agent == owner`, so **no agent path
-has ever been refused for being the wrong caller** on mainnet. `ENotAgent` and
-`ESuspended` have never fired on chain.
+**Why it mattered more than it looked.** While `agent == owner`, **no agent path
+could be refused for being the wrong caller** on mainnet. `ENotAgent` and
+`ESuspended` had never fired on chain.
 
-To be precise about what is and is not covered, because the two are easily
+To be precise about what was and was not covered, because the two are easily
 conflated: the Move test suite DOES assert these gates — `non_agent_aborts`,
-`suspended_policy_aborts`, tick-width bounds, cap binding, and agent rotation. So
-the logic is unit-tested. What has never happened is a refusal on mainnet against a
-separate caller. That is the difference between "the gate is coded correctly" and
-"the gate is the thing standing between a hostile caller and the funds".
+`suspended_policy_aborts`, tick-width bounds, cap binding, and agent rotation. So the
+logic was unit-tested. What had never happened was a refusal on mainnet against a
+separate caller — the difference between "the gate is coded correctly" and "the gate
+is the thing standing between a hostile caller and the funds".
+
+That difference is now closed for `ENotAgent`: after the handover, a swap submitted
+from the owner's address aborts on chain in `assert_agent_gates`. `ESuspended`
+remains unit-tested only.
 
 **Why the agent key is safe on a server.** It holds nothing — no funds, only a
 bounded permission. Its gas wallet bounds a compromise further.

@@ -216,6 +216,7 @@ used to share the word "close", which is why this table exists.
 | **Suspend** (per hire) | `policy::set_suspended` | flips the kill switch | no | yes |
 | **swap pool** Allow / Block | `policy::set_pool_allowed` | adds or removes a pool from `allowed_pools` | no | yes |
 | **Exit** (position) | `position_guard::redeem_with_rewards` | removes liquidity, collects fees, calls `cetus_pool::close_position` — destroys the position object | **yes** — LP capital → destination | no — terminal for that guard |
+| **hand over** | `policy::set_agent` + `set_max_slippage_bps` | who may act, and how far a swap may move the price | no | yes |
 | **Withdraw all** | `spend_vault::withdraw` | moves SUI out of the vault | **yes** — vault → owner | yes — Fund puts it back |
 
 **The two piles of money are separate.**
@@ -270,17 +271,25 @@ surplus returned, CETUS rewards collected); redeem; `EPoolNotAllowed` on the wro
 venue; fund / set-budget / venue open-close from the UI; and the full position
 cycle driven from the UI with wallet signing.
 
-**Not proven, and it matters:** **owner/agent separation.** The gates are covered by
-unit tests — the Move suite asserts `non_agent_aborts`, `suspended_policy_aborts`,
-the tick-width bounds and cap binding. What has never happened is a refusal **on
-mainnet, against a separate caller**: every agent-path proof so far was signed by an
-address that is *both* owner and agent, so `ENotAgent` and `ESuspended` have never
-fired on chain.
+**Now demonstrated:** **owner/agent separation.** The gates are covered by unit
+tests, and for most of this project's life that was all they were — `agent == owner`,
+so no call could be refused as the wrong caller. `hire-agent.js --repoint` handed the
+grant to a different address, and a swap submitted from the owner's address then
+aborted on mainnet:
+
+```text
+Status: Failure — MoveAbort in <pkg>::policy::assert_agent_gates
+Aborted with 'ENotAgent' -- 'caller is not the authorised agent'
+```
 
 Worth keeping straight, because the two are easily conflated: a unit test shows the
 gate is coded correctly; a mainnet refusal shows it is the thing standing between a
-hostile caller and the funds. Only the second is evidence about this deployment,
-which is why per-server agent identity is the recommended first move.
+hostile caller and the funds. Only the second is evidence about this deployment — and
+it took a deliberate migration to obtain, because while agent and owner are the same
+address the gate can never fire.
+
+**Still unit-tested only:** `ESuspended`, and the slippage bound. The bound can only
+be exercised with the agent's key, and the agent has no software yet.
 
 **Also not proven:** a third-party MCP server returning bytes (the manifest and
 verification path is designed, not built), and the cron/interval strategy.

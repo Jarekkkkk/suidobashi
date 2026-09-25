@@ -90,15 +90,19 @@ repository, in the server, or in any request.
 - owner actions from the UI: fund vault, set budget, venue open/close
 - the full position cycle driven from the UI with wallet-extension signing
 
-**Not proven, and it matters:** **owner/agent separation.** The gates themselves
-are covered by unit tests — the Move suite asserts `non_agent_aborts`,
-`suspended_policy_aborts`, the tick-width bounds and cap binding. What has never
-happened is a refusal **on mainnet, against a genuinely separate caller**: every
-agent-path proof so far was signed by an address that is *both* owner and agent,
-so `ENotAgent` and `ESuspended` have never fired on chain. The separation is the
-product, and it is currently **unit-tested rather than demonstrated** — which is why
-per-server agent identity is the recommended first move in the
-[roadmap](docs/ROADMAP.md).
+**Now demonstrated — and it took a deliberate act to get there.** The gates are
+covered by unit tests, and for most of this project's life that was *all* they were:
+`agent == owner`, so no call could ever be refused as the wrong caller. Handing the
+grant to a different address changed that, and a swap submitted from the owner's
+address now aborts **on mainnet**:
+
+```text
+Status: Failure — MoveAbort in <pkg>::policy::assert_agent_gates
+Aborted with 'ENotAgent' -- 'caller is not the authorised agent'
+```
+
+**Still unit-tested only:** `ESuspended`, and the slippage bound — the bound can only
+be exercised with the agent's key, and the agent has no software yet.
 
 ## What this is not
 

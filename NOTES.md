@@ -180,6 +180,43 @@ Note the asymmetry that costs a day if forgotten: **structs are frozen, dynamic
 fields are not.** Anything the design says "we can just add later" has to be
 planned as a dynamic field, a separate object, or a new struct from the start.
 
+**An upgrade can ADD a check but cannot IMPOSE one.** Every prior version of a
+package stays callable with its own bytecode, so a check added in v4 does not apply
+to a caller who names v3. Demonstrated, not theorised: after v4 shipped a slippage
+bound in `swap_and_route`, v3's unbounded body is still reachable, and v3's code can
+operate on a policy that v4 modified — because object types keep the original-id
+identity and the layout is unchanged.
+
+The Sui docs' recommended fix is a **version field in the shared object that every
+version checks**. It cannot be retro-fitted: v1 through v3 were published without
+one, so they will never refuse. What this means in practice:
+
+```text
+against a BUGGY agent     a new check helps, if the caller uses the new id
+against a HOSTILE agent   it does not. Only SHARED STATE binds every version:
+                          the allowance, the pool allowlist, the destination,
+                          and the suspension flag.
+```
+
+So a limit added by upgrade is a guard against mistakes, never a boundary against
+an adversary. Do not describe it as one.
+
+**`ENotAgent` fires on mainnet.** For most of this project's life `agent == owner`,
+so no call could ever be refused as the wrong caller — the gate passed its unit
+tests while never being exercised on chain. Handing the grant to a different address
+(`hire-agent.js --repoint`) changed that. A swap submitted from the owner's address
+against a policy whose agent is someone else now aborts on chain:
+
+```text
+Status: Failure — MoveAbort in <pkg>::policy::assert_agent_gates
+Aborted with 'ENotAgent' -- 'caller is not the authorised agent'
+```
+
+Worth reproducing deliberately: `tx.build({ client })` simulates and would refuse
+the same transaction pre-flight, so producing the on-chain failure needs the
+no-simulation build (`--gas-budget` on `sui client ptb`, or the offline recipe in
+the previous note).
+
 **Cetus refuses to close a position while rewards are owed.** `close_position`
 requires `is_empty`, which means zero liquidity AND zero both fee sides AND every
 reward at zero. A pool paying rewards therefore cannot be exited unless the
