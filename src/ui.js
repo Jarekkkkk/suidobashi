@@ -1,0 +1,728 @@
+/* Three-pane UI over the intent loop.
+ *
+ * Pane 1  what you said, and the intent the local model extracted from it
+ * Pane 2  the deterministic decision — the gate, not the model
+ * Pane 3  what actually happened on-chain, with a digest anyone can look up
+ *
+ * Deliberately a single file with no framework and no build step. It shells out
+ * to `src/agent.js`, which is the thing already proven to work, so the UI adds no
+ * new trust surface: it cannot sign, cannot reach a key, and cannot bypass the
+ * gate. Everything it shows is what the CLI reported.
+ *
+ * Bound to loopback only. If this were reachable from the network, the boundary
+ * underneath it would be decoration.
+ *
+ * Usage: node src/ui.js   →  http://127.0.0.1:8788
+ */
+import 'dotenv/config';
+import http from 'node:http';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { VAULT_ID, DEPLOYER, USDC_TYPE, REWARD_TYPE, PACKAGE_LATEST_ID, POOL_TICK_SPACING, GUARD_ID, GUARD_SHARED_VERSION } from './addresses.js';
+import { HIRES } from './hires.js';
+import { findCreatedGuard, repointAddresses } from './guard-id.js';
+
+const PORT = Number(process.env.UI_PORT ?? 8788);
+const HOST = process.env.UI_HOST ?? '127.0.0.1';
+
+/**
+ * Refuse to listen anywhere but loopback unless explicitly forced. This page can
+ * spend, so binding it to a routable address would expose the agent to the
+ * network — the kind of change that should be deliberate and loud, not a config
+ * edit that slips through.
+ */
+const LOOPBACK = /^(127\.\d+\.\d+\.\d+|::1|localhost)$/;
+if (!LOOPBACK.test(HOST) && process.env.UI_ALLOW_NON_LOOPBACK !== '1') {
+  console.error(
+    `refusing to bind ${HOST}: this serves an agent that can spend.\n` +
+    'Set UI_ALLOW_NON_LOOPBACK=1 if you genuinely mean to expose it.',
+  );
+  process.exit(1);
+}
+
+/**
+ * Per-run token, injected into the page we serve and required on every /api call.
+ *
+ * Loopback is not user-scoped, so any local process can reach this port. The
+ * token stops a *remote* page from driving the agent through a cross-origin
+ * request — it cannot read the token, because same-origin policy blocks reading
+ * our response body. It does not defend against malware already running as this
+ * user, and nothing on loopback would.
+ */
+const TOKEN = crypto.randomBytes(24).toString('hex');
+
+/**
+ * Build the wallet bundle at startup and hold it in memory.
+ *
+ * Generated rather than committed: 850 KB of transpiled libraries does not belong
+ * in the tree, and building at start means it can never be stale relative to
+ * src/web/wallet-entry.js. Written to a temp path outside the project so it is
+ * never mistaken for source, then removed.
+ */
+function buildWalletBundle() {
+  const out = path.join(os.tmpdir(), `agent-wallet-bundle-${process.pid}.js`);
+  const r = spawnSync(
+    'bun',
+    ['build', 'src/web/wallet-entry.js', '--outfile', out, '--format=esm', '--target=browser'],
+    { encoding: 'utf-8', timeout: 120_000 },
+  );
+  if (r.status !== 0) {
+    console.error('wallet bundle build failed:', ((r.stderr || r.stdout) || 'no output').slice(-400));
+    return null;
+  }
+  try {
+    const js = fs.readFileSync(out, 'utf-8');
+    fs.unlinkSync(out);
+    return js;
+  } catch (e) {
+    console.error('wallet bundle unreadable:', e.message);
+    return null;
+  }
+}
+
+/** Run the CLI with an argv array and no shell, so text cannot be interpolated. */
+function runAgent(text, extra = []) {
+  const r = spawnSync('node', ['src/agent.js', text, ...extra], {
+    encoding: 'utf-8',
+    timeout: 300_000,
+  });
+  return { stdout: r.stdout || '', stderr: r.stderr || '', status: r.status ?? 1 };
+}
+
+/**
+ * Read each hire's state straight off its policy object. These are the fields the
+ * chain enforces, so they are read rather than remembered — the local registry
+ * only supplies the human-readable name and the granted figure.
+ */
+async function hires() {
+  const { SuiGrpcClient } = await import('@mysten/sui/grpc');
+  const client = new SuiGrpcClient({
+    network: 'mainnet',
+    baseUrl: 'https://fullnode.mainnet.sui.io:443',
+  });
+
+  const out = [];
+  for (const [name, h] of Object.entries(HIRES)) {
+    const row = { name, policyId: h.policyId, budgetSui: h.budgetSui,
+                  feeBps: h.venue.feeBps, venueId: h.venue.id };
+    try {
+      const o = await client.getObject({ objectId: h.policyId, include: { json: true } });
+      const j = (o.object ?? o).json ?? {};
+      row.agent = j.agent;
+      row.suspended = Boolean(j.suspended);
+      const list = (j.allowed_pools?.contents ?? []).map((x) => String(x).toLowerCase());
+      row.venues = list.length;
+      // Whether this hire's OWN venue is open, read from the chain. A count alone
+      // hides the difference between two hires on two different pools.
+      row.ownVenueOpen = list.includes(String(h.venue.id).toLowerCase());
+      row.destination = j.destination;
+    } catch (e) {
+      row.error = String(e?.message || e).slice(0, 120);
+    }
+    out.push(row);
+  }
+  return out;
+}
+
+/**
+ * Builds awaiting a signature, keyed by id. The bytes stay HERE.
+ *
+ * The browser receives the bytes to sign and returns only a signature, so a
+ * stale tab or a tampered page cannot substitute a different transaction — the
+ * signature would not verify against these bytes. And because the entry is
+ * single-use and short-lived, a captured id is not replayable past one submit.
+ */
+const pending = new Map();
+const PENDING_TTL_MS = 10 * 60 * 1000;
+
+function prunePending() {
+  const cutoff = Date.now() - PENDING_TTL_MS;
+  for (const [id, v] of pending) if (v.at < cutoff) pending.delete(id);
+}
+
+/** First complete JSON document on stdout — agent.js may print more than one. */
+function firstJson(stdout) {
+  const s = stdout || '';
+  const start = s.indexOf('{');
+  for (let end = s.length; end > start && start >= 0; end--) {
+    try {
+      return JSON.parse(s.slice(start, end));
+    } catch { /* keep shrinking */ }
+  }
+  return null;
+}
+
+/** Parse a MIST amount from request input, tolerating strings. Null if unusable. */
+function toMist(v) {
+  try {
+    const b = BigInt(String(v ?? '0').trim());
+    return b >= 0n ? b : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The guard's tick-width bounds, mirrored from the chain so a bad range gets a
+ * clear refusal. The chain re-checks them (assert_range_in_bounds), so a stale
+ * copy here can only ever refuse something legal — never allow something illegal.
+ */
+const GUARD_MIN_WIDTH = 100;
+const GUARD_MAX_WIDTH = 2_000;
+
+/**
+ * Resolve an action to a script and its environment, server-side.
+ *
+ * The browser names an *action*, never a script or an amount: a swap's plan comes
+ * from re-deriving it here off the user's own words, so a tampered page cannot ask
+ * for a different amount, policy or venue than the gate approved.
+ */
+function actionFor(kind, body) {
+  if (kind === 'swap') {
+    const doc = firstJson(runAgent(body.text || '').stdout);
+    if (!doc) return { error: 'could not parse a proposal from the agent' };
+    if (doc.decision !== 'PROPOSED') {
+      return { refused: (doc.validation && doc.validation.reason) || doc.decision };
+    }
+    return { script: doc.plan.command, env: doc.plan.env, proposal: doc };
+  }
+  if (kind === 'suspend') {
+    if (!body.hire || !(body.hire in HIRES)) return { error: 'unknown hire' };
+    return {
+      script: 'node src/set-suspended.js',
+      env: { HIRE: body.hire, SUSPEND: body.suspended ? 'true' : 'false' },
+      proposal: { action: body.suspended ? 'suspend' : 'resume', hire: body.hire },
+    };
+  }
+  if (kind === 'topup') {
+    const mist = toMist(body.amountMist);
+    if (mist === null || mist <= 0n) return { error: 'amountMist must be a positive integer' };
+    return {
+      script: 'node src/topup-vault.js',
+      // SKIP_BUDGET: funding and granting are separate operations here, so the
+      // vault figure changes without silently moving anyone's ceiling.
+      env: { TOPUP_MIST: String(mist), SKIP_BUDGET: '1' },
+      proposal: { action: 'fund the vault', amountSui: (Number(mist) / 1e9).toString() },
+    };
+  }
+  if (kind === 'budget') {
+    if (!body.hire || !(body.hire in HIRES)) return { error: 'unknown hire' };
+    const mist = toMist(body.amountMist);
+    if (mist === null) return { error: 'amountMist must be a non-negative integer' };
+    return {
+      script: 'node src/set-budget.js',
+      env: { HIRE: body.hire, BUDGET_MIST: String(mist) },
+      proposal: {
+        action: 'set budget',
+        hire: body.hire,
+        amountSui: (Number(mist) / 1e9).toString(),
+      },
+    };
+  }
+  if (kind === 'venue') {
+    if (!body.hire || !(body.hire in HIRES)) return { error: 'unknown hire' };
+    const venue = body.venue || HIRES[body.hire].venue.id;
+    const allow = body.allow !== false;
+    return {
+      script: 'node src/hire-agent.js --allowlist',
+      env: { HIRE: body.hire, VENUE: venue, ALLOW: allow ? 'true' : 'false' },
+      proposal: {
+        action: allow ? 'open venue' : 'close venue',
+        hire: body.hire,
+        venue,
+      },
+    };
+  }
+  if (kind === 'position') {
+    // Provisioning: mints a new guard around a fresh Cetus position. The guard id
+    // is not predictable here — object::new runs on the validator — so it has to be
+    // read back from the transaction afterwards. See NOTES on the position cycle.
+    return {
+      script: 'node src/create-position.js',
+      env: {},
+      proposal: { action: 'open a guarded position' },
+    };
+  }
+  if (kind === 'deposit') {
+    const usdc = toMist(body.fixAmountUsdc);
+    const sui = toMist(body.supplySui);
+    if (usdc === null || usdc <= 0n) return { error: 'fixAmountUsdc must be a positive integer' };
+    if (sui === null || sui <= 0n) return { error: 'supplySui must be a positive integer' };
+    // Ceilings, not policy: this path is owner-gated and owner-signed, but a
+    // tampered page should not be able to name an arbitrary withdrawal.
+    if (usdc > 10_000_000n) return { error: 'fixAmountUsdc above 10 USDC is not allowed here' };
+    if (sui > 5_000_000_000n) return { error: 'supplySui above 5 SUI is not allowed here' };
+    return {
+      script: 'node src/deposit-liquidity.js',
+      // SUPPLY_SUI is headroom, not a spend: the module adds a fixed USDC amount and
+      // routes whatever the SUI side does not consume back to the destination.
+      env: {
+        FIX_AMOUNT: String(usdc), SUPPLY_SUI: String(sui),
+        GUARD_ID: activeGuard.id, GUARD_SHARED_VERSION: String(activeGuard.version),
+      },
+      proposal: {
+        action: 'fund the position',
+        usdc: (Number(usdc) / 1e6).toString(),
+        suiHeadroom: (Number(sui) / 1e9).toString(),
+      },
+    };
+  }
+  if (kind === 'rebalance') {
+    const lo = Number(body.tickLower);
+    const hi = Number(body.tickUpper);
+    if (!Number.isInteger(lo) || !Number.isInteger(hi)) return { error: 'ticks must be integers' };
+    if (lo >= hi) return { error: 'tickLower must be below tickUpper' };
+    if (lo % POOL_TICK_SPACING !== 0 || hi % POOL_TICK_SPACING !== 0) {
+      return { error: `ticks must be multiples of the pool spacing (${POOL_TICK_SPACING})` };
+    }
+    const width = hi - lo;
+    if (width < GUARD_MIN_WIDTH || width > GUARD_MAX_WIDTH) {
+      return {
+        error: `width ${width} is outside the guard's bounds ${GUARD_MIN_WIDTH}..${GUARD_MAX_WIDTH}`,
+      };
+    }
+    return {
+      script: 'node src/rebalance.js',
+      env: {
+        NEW_TICK_LOWER: String(lo), NEW_TICK_UPPER: String(hi),
+        GUARD_ID: activeGuard.id, GUARD_SHARED_VERSION: String(activeGuard.version),
+      },
+      proposal: { action: 'rebalance into a new range', tickLower: lo, tickUpper: hi, width },
+    };
+  }
+  if (kind === 'redeem') {
+    return {
+      script: 'node src/redeem.js',
+      env: { GUARD_ID: activeGuard.id, GUARD_SHARED_VERSION: String(activeGuard.version) },
+      proposal: { action: 'exit the position' },
+    };
+  }
+  return { error: `unknown action "${kind}"` };
+}
+
+/**
+ * Which guard to operate on. Runtime state, not a constant.
+ *
+ * A guard is emptied for good when its position is exited, and the next `create` mints
+ * a new one with a new id generated on the validator. This process is the authority:
+ * it passes the value to every guard script and adopts the new one after a create, so
+ * the scripts, the messages and the config cannot disagree about which guard is meant.
+ * addresses.js is where it is persisted, and where it starts from.
+ */
+let activeGuard = { id: GUARD_ID, version: GUARD_SHARED_VERSION };
+
+/**
+ * Adopt the guard that a just-submitted `position` transaction minted.
+ *
+ * Without this, the next deposit, rebalance or redeem targets the previous guard --
+ * which a prior exit left empty -- and fails with `borrow_child_object`, a message
+ * that reads like "you forgot to open a position" when the operator just did.
+ *
+ * Persisted back into addresses.js so it survives a restart and shows up in git.
+ * The write is checked before it happens: this file holds every deployed id, and a
+ * corrupt one is far worse than a stale one.
+ */
+function adoptGuardFrom(digest) {
+  const r = spawnSync('sui', ['client', 'tx-block', digest, '--json'],
+    { encoding: 'utf-8', timeout: 120_000 });
+
+  let doc;
+  try {
+    doc = JSON.parse(r.stdout || '');
+  } catch {
+    return { error: 'could not read the transaction back to find the new guard' };
+  }
+
+  // Reading the guard out of the effects, and rewriting the config to point at it,
+  // both live in src/guard-id.js and are tested against a real transaction by
+  // src/verify-guard.js. They are not written inline here on purpose: the first
+  // version of this function kept its own copy, so the check tested a module nothing
+  // ran while the code that did run went untested -- and the two had already drifted.
+  const found = findCreatedGuard(doc);
+  if (found.error) return found;
+  const { id, version } = found;
+
+  activeGuard = { id, version }; // in memory first: the transaction already happened
+
+  const file = 'src/addresses.js';
+  let before;
+  try {
+    before = fs.readFileSync(file, 'utf8');
+  } catch (e) {
+    return { id, version, persisted: false, note: `adopted in memory; could not read ${file}: ${e.message}` };
+  }
+
+  // null means the file did not match, and nothing should be written. See
+  // repointAddresses: a half-updated pair is worse than a stale one.
+  const after = repointAddresses(before, id, version);
+  if (!after) {
+    return { id, version, persisted: false, note: `adopted in memory; ${file} did not match and was left alone` };
+  }
+
+  try {
+    fs.writeFileSync(`${file}.tmp`, after);
+    fs.renameSync(`${file}.tmp`, file);
+    return { id, version, persisted: true };
+  } catch (e) {
+    // Swallowed on purpose. The transaction succeeded and the guard is adopted in
+    // memory, so the caller still needs an answer about it; letting this throw would
+    // escape submit() into the request handler and return nothing at all.
+    return { id, version, persisted: false, note: `adopted in memory; could not write ${file}: ${e.message}` };
+  }
+}
+
+/**
+ * Turn a raw chain abort into something an operator can act on.
+ *
+ * The dry run refusing a doomed transaction is correct — but a Move abort code is
+ * not an explanation, and "borrow_child_object" tells a person nothing about what
+ * to do next. These are the aborts this project actually keeps hitting.
+ */
+function explainAbort(message) {
+  const m = String(message || '');
+  if (m.includes('borrow_child_object') && m.includes('abort code: 1')) {
+    // Deliberately does not say "open a position first". That was the first version
+    // of this message, and it was wrong: the usual cause is not a missing position
+    // but a guard that was already exited, so the operator is told to do something
+    // they just did. Names the guard it actually checked, so a mismatch is visible.
+    return `there is no position inside the guard this server is using `
+      + `(${activeGuard.id.slice(0, 12)}…). Either no position has been opened yet, or this is `
+      + 'a guard that was exited earlier: exiting empties a guard for good, and the next open '
+      + 'mints a new one whose id this process adopts from that transaction. The order is: '
+      + 'open, fund, rebalance, exit.';
+  }
+  return m.slice(-400);
+}
+
+/**
+ * Build the transaction and hold the bytes. No key, no signature, no submission —
+ * `tx.build({ client })` runs a resolution pass that simulates, so a doomed
+ * transaction fails here rather than after the user has approved it.
+ */
+function build(kind, body) {
+  const a = actionFor(kind, body);
+  if (a.error || a.refused) return a;
+
+  const [cmd, ...args] = a.script.split(/\s+/);
+  const built = spawnSync(cmd, [...args, '--emit-bytes'], {
+    env: { ...process.env, ...a.env },
+    encoding: 'utf-8',
+    timeout: 300_000,
+  });
+  const bytes = (built.stdout || '').trim();
+  if (built.status !== 0 || !bytes) {
+    // Strip the CLI's "fatal:" prefix — this text goes to a person in the UI.
+    const raw = ((built.stderr || built.stdout) || 'build failed').trim();
+    return { error: explainAbort(raw.replace(/^fatal:\s*/i, '')) };
+  }
+
+  prunePending();
+  const id = crypto.randomUUID();
+  pending.set(id, { bytes, proposal: a.proposal, at: Date.now(), kind });
+  return { id, bytes, proposal: a.proposal };
+}
+
+/**
+ * Submit bytes we built, with a signature we did not provide.
+ *
+ * `execute-signed-tx` cannot sign anything — it submits already-signed bytes. So
+ * the process that runs it holds no key.
+ */
+function submit(id, signature) {
+  const entry = pending.get(id);
+  if (!entry) return { error: 'unknown or expired build id — build it again' };
+  pending.delete(id); // single use, regardless of outcome
+
+  const r = spawnSync(
+    'sui',
+    ['client', 'execute-signed-tx', '--tx-bytes', entry.bytes, '--signatures', signature],
+    { encoding: 'utf-8', timeout: 300_000 },
+  );
+  const all = `${r.stdout || ''}${r.stderr || ''}`;
+  const digest = all.match(/Transaction Digest: (\w+)/)?.[1];
+  const status = all.match(/Status: (\w+)/)?.[1];
+
+  // A create changes which guard everything else must address, so adopt it here,
+  // immediately and in one place, rather than leaving the value to be hand-edited
+  // between one click and the next.
+  const guard = entry.kind === 'position' && digest && status === 'Success'
+    ? adoptGuardFrom(digest)
+    : null;
+
+  return {
+    digest,
+    status,
+    output: all.slice(0, 800),
+    ...(guard ? { guard } : {}),
+  };
+}
+
+async function state() {
+  const { SuiGrpcClient } = await import('@mysten/sui/grpc');
+  const client = new SuiGrpcClient({
+    network: 'mainnet',
+    baseUrl: 'https://fullnode.mainnet.sui.io:443',
+  });
+  const at = async (owner, coinType) => {
+    const b = await client.getBalance({ owner, coinType });
+    return b.balance?.balance ?? '0';
+  };
+  return {
+    vaultSuiMist: await at(VAULT_ID, '0x2::sui::SUI'),
+    walletSuiMist: await at(DEPLOYER, '0x2::sui::SUI'),
+    usdc: await at(DEPLOYER, USDC_TYPE),
+    cetus: await at(DEPLOYER, REWARD_TYPE),
+    vaultId: VAULT_ID,
+    packageId: PACKAGE_LATEST_ID,
+  };
+}
+
+const PAGE = `<!doctype html>
+<meta charset="utf-8">
+<title>on-device agent wallet</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+         background:#111; color:#ddd; }
+  header { padding:14px 18px; border-bottom:1px solid #262626; }
+  h1 { margin:0; font-size:15px; font-weight:600; letter-spacing:.02em; }
+  header .sub { color:#777; font-size:12px; margin-top:4px; }
+  .wrap { display:grid; grid-template-columns:1fr 1fr 1fr; gap:1px;
+          background:#262626; min-height:calc(100vh - 108px); }
+  .pane { background:#111; padding:14px 16px; overflow:auto; }
+  .pane h2 { margin:0 0 10px; font-size:12px; text-transform:uppercase;
+             letter-spacing:.08em; color:#666; font-weight:600; }
+  .ask { display:flex; gap:8px; margin:12px 18px 0; }
+  input[type=text] { flex:1; background:#1a1a1a; border:1px solid #333; color:#eee;
+                     padding:10px 12px; border-radius:6px; font:inherit; }
+  input[type=text]:focus { outline:none; border-color:#4a7; }
+  button { background:#1f6f4a; border:0; color:#fff; padding:10px 16px;
+           border-radius:6px; font:inherit; cursor:pointer; }
+  button:disabled { background:#2a2a2a; color:#666; cursor:not-allowed; }
+  button.ghost { background:#1d1d1d; border:1px solid #333; }
+  pre { margin:0; white-space:pre-wrap; word-break:break-word; font:inherit; }
+  .k { color:#666; }
+  .ok { color:#5c8; } .bad { color:#e77; } .warn { color:#db3; }
+  .row { display:flex; justify-content:space-between; gap:12px; padding:3px 0; }
+  a { color:#6af; }
+  .stats { padding:12px 18px; border-top:1px solid #262626; color:#888; font-size:12px;
+           display:flex; gap:22px; flex-wrap:wrap; }
+  .stats b { color:#ccc; font-weight:600; }
+  .hires { padding:10px 18px; display:flex; gap:12px; flex-wrap:wrap;
+           align-items:center; border-bottom:1px solid #262626; }
+  .hires .label { color:#666; font-size:12px; text-transform:uppercase;
+                  letter-spacing:.08em; }
+  .hires .legend { color:#555; font-size:11px; width:100%; margin-top:2px; }
+  .wallet { padding:8px 18px; border-bottom:1px solid #262626; display:flex;
+            gap:10px; align-items:center; }
+  .wallet button { padding:5px 12px; font-size:12px; }
+  .owner { padding:10px 18px; display:flex; gap:16px; flex-wrap:wrap;
+           align-items:center; border-bottom:1px solid #262626; }
+  .owner .label { color:#666; font-size:12px; text-transform:uppercase;
+                  letter-spacing:.08em; }
+  .owner .grp { display:flex; gap:6px; align-items:center; color:#888; }
+  .owner input, .owner select { background:#1a1a1a; border:1px solid #333; color:#eee;
+                                padding:4px 6px; border-radius:4px; font:inherit;
+                                font-size:12px; }
+  .owner input { width:5.5em; }
+  .owner button { padding:4px 10px; font-size:12px; }
+  .hire { border:1px solid #2a2a2a; border-radius:6px; padding:6px 10px;
+          display:flex; gap:10px; align-items:center; }
+  .hire.off { opacity:.6; border-color:#5c2a2a; }
+  .hire button { padding:4px 10px; font-size:12px; }
+</style>
+<body data-token="__TOKEN__">
+<header>
+  <h1>on-device agent wallet</h1>
+  <div class="sub">model extracts &rarr; this code computes &rarr; the gate decides &rarr; the chain enforces</div>
+</header>
+
+<div class="wallet" id="wallet"><span class="k">wallet: not connected</span></div>
+
+<div class="ask">
+  <input id="q" type="text" placeholder="swap 0.05 SUI into USDC" autocomplete="off">
+  <button id="ask">Ask</button>
+  <button id="run" class="ghost" disabled>Run on-chain</button>
+</div>
+
+<div class="owner" id="owner">
+  <span class="label">owner actions</span>
+  <span class="grp">fund vault <input id="topupAmt" type="text" value="0.05"> SUI
+    <button class="ghost" id="topup">Fund</button></span>
+  <span class="grp">budget <select id="budHire"></select>
+    <input id="budAmt" type="text" value="0.03"> SUI
+    <button class="ghost" id="setBud">Set</button></span>
+  <span class="grp">venue <select id="venHire"></select>
+    <button class="ghost" id="venOpen">Open</button>
+    <button class="ghost" id="venClose">Close</button></span>
+  <div class="legend">each of these asks the wallet to sign — nothing is signed by this page.</div>
+  <div class="msg" id="ownerMsg"></div>
+</div>
+
+<div class="owner" id="position">
+  <span class="label">position</span>
+  <span class="grp"><button class="ghost" id="posOpen">Open guarded position</button></span>
+  <span class="grp">fund <input id="depUsdc" type="text" value="0.5"> USDC
+    <input id="depSui" type="text" value="0.6"> SUI headroom
+    <button class="ghost" id="depBtn">Fund</button></span>
+  <span class="grp">range <input id="rebLo" type="text" value="68800"> ->
+    <input id="rebHi" type="text" value="69200">
+    <button class="ghost" id="rebBtn">Rebalance</button></span>
+  <span class="grp"><button class="ghost" id="redBtn">Exit</button></span>
+  <div class="legend">in order: open, fund, move the range. Exit closes the position for good and
+    leaves the guard holding a position that no longer exists, so open again before moving or exiting
+    once more. Rebalance is the agent's operation — it passes here because owner and agent are the
+    same address in this deployment.</div>
+</div>
+
+<div class="hires" id="hires"><span class="label">hires</span></div>
+
+<div class="wrap">
+  <div class="pane">
+    <h2>1 &middot; agent</h2>
+    <div id="agent" class="k">waiting for a request…</div>
+  </div>
+  <div class="pane">
+    <h2>2 &middot; gate</h2>
+    <div id="gate" class="k">nothing to decide</div>
+  </div>
+  <div class="pane">
+    <h2>3 &middot; chain</h2>
+    <div id="chain" class="k">nothing submitted</div>
+  </div>
+</div>
+
+<div class="stats" id="stats"></div>
+
+<!-- The page's code lives in src/web/page.js, where the linter and node --check can see
+     it. Embedding it here as inline text is what broke it twice: an escape in a regex
+     and an escape in a string were both consumed before reaching the browser. The token
+     rides on the body tag as a data attribute rather than a script tag, so nothing is
+     injected into script context at all. -->
+<script type="module" src="/wallet.js"></script>
+<script type="module" src="/page.js"></script>`;
+
+const server = http.createServer((req, res) => {
+  const send = (code, body, type = 'application/json') => {
+    res.writeHead(code, { 'Content-Type': type });
+    res.end(body);
+  };
+
+  if (req.method === 'GET' && req.url === '/wallet.js') {
+    // Served from memory, never a CDN: a local-first tool that fetches its wallet
+    // code off the internet at page load has given back the property it was
+    // selling. Contains no secrets, so it is not token-gated.
+    if (!walletBundleJs) {
+      return send(503, 'wallet bundle unavailable — server log has the build error',
+        'text/plain; charset=utf-8');
+    }
+    return send(200, walletBundleJs, 'text/javascript; charset=utf-8');
+  }
+
+  // The page's own modules. Read on every request rather than cached at startup:
+  // editing one and reloading the browser is the whole dev loop, and a
+  // startup-cached copy would quietly serve something nobody wrote any more.
+  //
+  // Names are matched literally above, so the path handed to readFileSync is never
+  // derived from the request and cannot be steered out of src/web/.
+  const moduleRoutes = { '/page.js': 'page.js', '/markup.js': 'markup.js', '/units.js': 'units.js' };
+  if (req.method === 'GET' && moduleRoutes[req.url]) {
+    const name = moduleRoutes[req.url];
+    try {
+      return send(200, fs.readFileSync(`src/web/${name}`, 'utf8'),
+        'text/javascript; charset=utf-8');
+    } catch (e) {
+      return send(500, `src/web/${name} unreadable: ${e.message}`, 'text/plain; charset=utf-8');
+    }
+  }
+
+  if (req.method === 'GET' && req.url === '/') {
+    // Token injected here rather than fetched, so the page itself never has to ask
+    // for it. A cross-origin caller can reach the port but cannot read this.
+    //
+    // It rides on the body tag as a data attribute, not in a <script> block: the
+    // value is hex today, but keeping it out of script context means the injection
+    // cannot become script injection whatever the token's shape becomes.
+    return send(200, PAGE.replace('__TOKEN__', TOKEN), 'text/html; charset=utf-8');
+  }
+
+  if (req.url?.startsWith('/api/')) {
+    if (req.headers['x-agent-token'] !== TOKEN) {
+      return send(403, JSON.stringify({ error: 'bad or missing token' }));
+    }
+  }
+
+  if (req.method === 'GET' && req.url === '/api/state') {
+    return state().then((s) => send(200, JSON.stringify(s))).catch((e) => send(500, JSON.stringify({ error: e.message })));
+  }
+
+  if (req.method === 'GET' && req.url === '/api/hires') {
+    return hires().then((h) => send(200, JSON.stringify(h))).catch((e) => send(500, JSON.stringify({ error: e.message })));
+  }
+
+  if (req.method === 'POST' && (req.url === '/api/propose' || req.url === '/api/build')) {
+    let raw = '';
+    req.on('data', (c) => { raw += c; if (raw.length > 8192) req.destroy(); });
+    req.on('end', async () => {
+      let body;
+      try {
+        body = JSON.parse(raw || '{}');
+      } catch {
+        return send(400, JSON.stringify({ error: 'bad body' }));
+      }
+
+      if (req.url === '/api/propose') {
+        if (typeof body.text !== 'string' || !body.text.trim()) {
+          return send(400, JSON.stringify({ error: 'text required' }));
+        }
+        const r = runAgent(body.text);
+        return send(200, JSON.stringify(r));
+      }
+
+      // /api/build: returns bytes to sign, or a refusal with its reason.
+      const kind = body.kind || 'swap';
+      try {
+        const out = build(kind, body);
+        return send(out.error ? 400 : 200, JSON.stringify(out));
+      } catch (e) {
+        return send(500, JSON.stringify({ error: String(e?.message || e) }));
+      }
+    });
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/api/submit') {
+    let raw = '';
+    req.on('data', (c) => { raw += c; if (raw.length > 65536) req.destroy(); });
+    req.on('end', () => {
+      let id, signature;
+      try {
+        ({ id, signature } = JSON.parse(raw || '{}'));
+      } catch {
+        return send(400, JSON.stringify({ error: 'bad body' }));
+      }
+      if (!id || !signature) return send(400, JSON.stringify({ error: 'id and signature required' }));
+      const out = submit(id, signature);
+      send(out.error ? 400 : 200, JSON.stringify(out));
+    });
+    return;
+  }
+
+  send(404, JSON.stringify({ error: 'not found' }));
+});
+
+server.listen(PORT, HOST, () => {
+  console.error(`ui on http://${HOST}:${PORT}  (loopback only)`);
+  console.error(`token: ${TOKEN}`);
+  console.error('the page carries the token itself; this line is for curl and debugging');
+  console.error('signing is done by the wallet extension — this process holds no key');
+});
+
+// Build once at start so /wallet.js can never be stale.
+const walletBundleJs = buildWalletBundle();
+console.error(walletBundleJs
+  ? `wallet bundle ready (${(walletBundleJs.length / 1024).toFixed(0)} KB, served from memory)`
+  : 'wallet bundle FAILED — the page will show a connect error');
