@@ -321,6 +321,68 @@ public fun swap_and_route<A, B>(
     });
 }
 
+/// Swap a supplied balance, returning the output and whatever input was not consumed.
+///
+/// Two functions rather than one, because Move is statically typed and the INPUT
+/// SIDE differs by direction: A->B takes a `Balance<A>`, B->A takes a `Balance<B>`.
+/// A single signature cannot express both, and the direction cannot be inferred.
+///
+/// PRIMITIVES, and deliberately gate-free: they touch no vault, no cap, no allowance
+/// and no policy, so they can move nothing that was not handed to them. The caller
+/// decides what to do with the two balances.
+///
+/// They exist so the escrow path does not carry a second copy of Cetus's flash-swap
+/// plumbing. That plumbing is not incidental — the receipt has no `drop`, so
+/// repayment is forced in the same transaction and a half-completed trade cannot
+/// leave these functions.
+///
+/// Note what they do NOT do: they assert no price bound. The caller is expected to
+/// assert against the output — `order::settle_*` requires the maker's minimum before
+/// routing anything. That assertion, not a price limit, is what protects a maker,
+/// and it is why the escrow path does not need `max_slippage_bps`.
+public fun swap_balance_a2b<A, B>(
+    input: Balance<A>,
+    config: &GlobalConfig,
+    pool: &mut Pool<A, B>,
+    amount: u64,
+    sqrt_price_limit: u128,
+    clock: &Clock,
+): (Balance<A>, Balance<B>) {
+    let (bal_a, bal_b, receipt) =
+        cetus_pool::flash_swap<A, B>(config, pool, true, true, amount, sqrt_price_limit, clock);
+    let pay_amount = cetus_pool::swap_pay_amount(&receipt);
+
+    let mut remainder = input;
+    let pay = remainder.split(pay_amount);
+
+    // A->B: the pool's unused side is A and must be consumed, since Balance has no
+    // `drop`. The repayment takes a FRESH zero on the other side, not the output.
+    balance::destroy_zero(bal_a);
+    cetus_pool::repay_flash_swap<A, B>(config, pool, pay, balance::zero<B>(), receipt);
+    (remainder, bal_b)
+}
+
+/// B->A. Mirror of the above; the owed side and the unused side swap places.
+public fun swap_balance_b2a<A, B>(
+    input: Balance<B>,
+    config: &GlobalConfig,
+    pool: &mut Pool<A, B>,
+    amount: u64,
+    sqrt_price_limit: u128,
+    clock: &Clock,
+): (Balance<B>, Balance<A>) {
+    let (bal_a, bal_b, receipt) =
+        cetus_pool::flash_swap<A, B>(config, pool, false, true, amount, sqrt_price_limit, clock);
+    let pay_amount = cetus_pool::swap_pay_amount(&receipt);
+
+    let mut remainder = input;
+    let pay = remainder.split(pay_amount);
+
+    balance::destroy_zero(bal_b);
+    cetus_pool::repay_flash_swap<A, B>(config, pool, balance::zero<A>(), pay, receipt);
+    (remainder, bal_a)
+}
+
 // === Internals ===
 
 /// A -> B. Pool returns `(zero<A>, output<B>)`; we owe A. Returns
