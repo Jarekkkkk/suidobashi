@@ -620,8 +620,9 @@ const PAGE = `<!doctype html>
   <span class="grp"><button class="ghost" id="redBtn">Exit</button></span>
   <div class="legend">in order: open, fund, move the range. Exit closes the position for good and
     leaves the guard holding a position that no longer exists, so open again before moving or exiting
-    once more. Rebalance is the agent's operation — it passes here because owner and agent are the
-    same address in this deployment.</div>
+    once more. Rebalance is the <b>guard's</b> agent — a different agent from the policy's, and
+    currently your own address, which is why it still passes here. Swaps answer to the policy's
+    agent instead: whoever <b>hand over</b> names.</div>
 </div>
 
 <div class="hires" id="hires"><span class="label">hires</span></div>
