@@ -288,6 +288,16 @@ $('setBud').onclick = () => {
 $('poolAllow').onclick = () => ownerAction('venue', { hire: $('poolHire').value, allow: true });
 $('poolBlock').onclick = () => ownerAction('venue', { hire: $('poolHire').value, allow: false });
 
+// Step 1 of the escrow flow. The only step where money moves, and the only one you
+// sign — an agent fills the order afterwards, and you reclaim its storage last.
+$('ordMake').onclick = () => {
+  const amountMist = suiToMist($('ordAmt').value);
+  if (!amountMist) return say('enter SUI as a plain decimal, e.g. 0.01', 'bad');
+  const minOutUsdc = usdcToUnits($('ordMin').value);
+  if (!minOutUsdc) return say('enter USDC as a plain decimal, e.g. 0.005', 'bad');
+  return ownerAction('order', { amountMist, minOutUsdc });
+};
+
 // The route back to custody, and the step that must run before a package upgrade.
 // No amount field: the operation that matters is emptying the vault.
 $('withdraw').onclick = () => ownerAction('withdraw', {});

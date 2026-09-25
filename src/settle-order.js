@@ -112,6 +112,9 @@ async function main() {
       agent,
       order: ORDER_ID,
       sqrtPriceLimit: sqrtPriceLimit.toString(),
+      // Reported, never printed: a dry run should tell you whether --execute would
+      // work without making you go and look at the file.
+      agentKeyConfigured: Boolean(process.env.AGENT_SECRET_KEY),
       note: 'no key used — the simulation checks the caller, so this proves the gates pass',
       ok,
       status,

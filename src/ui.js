@@ -337,6 +337,35 @@ function actionFor(kind, body) {
       },
     };
   }
+  if (kind === 'order') {
+    // Escrow a swap order: step 1 of the escrow flow, and the ONLY step where money
+    // moves. The coin leaves the wallet here and sits inside the order until someone
+    // fills it or it expires.
+    const amount = toMist(body.amountMist);
+    if (amount === null || amount <= 0n) return { error: 'amountMist must be a positive integer' };
+    const minOut = toMist(body.minOutUsdc);
+    if (minOut === null || minOut <= 0n) return { error: 'minOutUsdc must be a positive integer' };
+    // Ceilings, not policy: a tampered page should not be able to escrow an arbitrary
+    // amount in one click.
+    if (amount > 1_000_000_000n) return { error: 'escrow above 1 SUI is not allowed here' };
+
+    return {
+      script: 'node src/create-order.js',
+      // No TTL from the browser: the UI has no field for it, so the script's own
+      // 24-hour default applies. Passing one through was a bug — `toMist(undefined)`
+      // returns 0n, and `0n ?? default` is 0n, so a missing value silently became a
+      // ZERO-length order that `create` refused as already expired.
+      env: {
+        ORDER_AMOUNT_MIST: String(amount),
+        ORDER_MIN_OUT: String(minOut),
+      },
+      proposal: {
+        action: 'escrow a swap order',
+        escrowSui: (Number(amount) / 1e9).toString(),
+        minOutUsdc: (Number(minOut) / 1e6).toString(),
+      },
+    };
+  }
   return { error: `unknown action "${kind}"` };
 }
 
@@ -623,6 +652,18 @@ const PAGE = `<!doctype html>
     once more. Rebalance is the <b>guard's</b> agent — a different agent from the policy's, and
     currently your own address, which is why it still passes here. Swaps answer to the policy's
     agent instead: whoever <b>hand over</b> names.</div>
+</div>
+
+<div class="owner" id="escrow">
+  <span class="label">escrow swap</span>
+  <span class="grp">escrow <input id="ordAmt" type="text" value="0.01"> SUI
+    floor <input id="ordMin" type="text" value="0.005"> USDC
+    <button class="ghost" id="ordMake">Create order</button></span>
+  <div class="legend">step 1 of the escrow flow, and the only step where money moves — the coin
+    leaves your wallet here and sits inside the order until an agent fills it, or it expires and
+    anyone may refund it to you. Your floor is enforced by the same function that moves the funds,
+    so it cannot be undercut. An agent fills the order with <b>settle-order.js</b>; you reclaim its
+    storage afterwards.</div>
 </div>
 
 <div class="hires" id="hires"><span class="label">hires</span></div>
