@@ -23,12 +23,13 @@
  *   v2  0xbaf5205c…  added position_guard
  *   v3  0x0517705e…  added the reward-aware variants
  *   v4  0x859e239f…  slippage bound + idempotent set_pool_allowed
+ *   v5  0x9167a804…  added `order` — escrowed swaps with a maker-committed minimum
  *
  * Object types keep their original-id identity across upgrades, so an OwnerCap
  * minted before any of this still matches the newest code.
  */
 export const PACKAGE_LATEST_ID =
-  '0x859e239f3507305d8cddcd5b5a236acd33c96d85db74e840556a8bc81f0ae84e';
+  '0x9167a8045e2fb552d31605486a150307842b5529993e183af2b3757a30ce5692';
 
 /**
  * The UpgradeCap, for running an upgrade from the CLI. Not referenced by any code
