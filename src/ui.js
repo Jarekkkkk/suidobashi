@@ -300,6 +300,20 @@ function actionFor(kind, body) {
       proposal: { action: 'exit the position' },
     };
   }
+  if (kind === 'withdraw') {
+    // Owner-gated, and the only route back to custody. Deliberately takes no amount
+    // from the browser: the operation that matters is emptying the vault, and an
+    // amount field here would only be a way to get a partial withdrawal wrong. The
+    // script still accepts WITHDRAW_MIST for taking part of it by hand.
+    //
+    // This is also the step that must happen BEFORE a package upgrade: an upgrade
+    // replaces code, and the safe moment to change code is while the vault is empty.
+    return {
+      script: 'node src/withdraw-vault.js',
+      env: {},
+      proposal: { action: 'withdraw the whole vault', destination: DEPLOYER },
+    };
+  }
   return { error: `unknown action "${kind}"` };
 }
 
@@ -558,6 +572,7 @@ const PAGE = `<!doctype html>
   <span class="grp">venue <select id="venHire"></select>
     <button class="ghost" id="venOpen">Open</button>
     <button class="ghost" id="venClose">Close</button></span>
+  <span class="grp"><button class="ghost" id="withdraw">Withdraw all</button></span>
   <div class="legend">each of these asks the wallet to sign — nothing is signed by this page.</div>
   <div class="msg" id="ownerMsg"></div>
 </div>

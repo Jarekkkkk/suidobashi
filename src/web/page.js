@@ -288,6 +288,10 @@ $('setBud').onclick = () => {
 $('venOpen').onclick = () => ownerAction('venue', { hire: $('venHire').value, allow: true });
 $('venClose').onclick = () => ownerAction('venue', { hire: $('venHire').value, allow: false });
 
+// The route back to custody, and the step that must run before a package upgrade.
+// No amount field: the operation that matters is emptying the vault.
+$('withdraw').onclick = () => ownerAction('withdraw', {});
+
 // === the position cycle ===
 //
 // Open -> fund -> move the range -> exit. Every step is a wallet signature; the
