@@ -193,7 +193,14 @@ MCP server is a **configuration** change, not a contract change.
 
 **Why it matters more than it looks.** Today `agent == owner`, so **no agent path
 has ever been refused for being the wrong caller** on mainnet. `ENotAgent` and
-`ESuspended` have never fired. The access-control claim is reasoned, not tested.
+`ESuspended` have never fired on chain.
+
+To be precise about what is and is not covered, because the two are easily
+conflated: the Move test suite DOES assert these gates — `non_agent_aborts`,
+`suspended_policy_aborts`, tick-width bounds, cap binding, and agent rotation. So
+the logic is unit-tested. What has never happened is a refusal on mainnet against a
+separate caller. That is the difference between "the gate is coded correctly" and
+"the gate is the thing standing between a hostile caller and the funds".
 
 **Why the agent key is safe on a server.** It holds nothing — no funds, only a
 bounded permission. Its gas wallet bounds a compromise further.

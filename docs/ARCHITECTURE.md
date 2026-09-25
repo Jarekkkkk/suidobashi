@@ -229,11 +229,17 @@ surplus returned, CETUS rewards collected); redeem; `EPoolNotAllowed` on the wro
 venue; fund / set-budget / venue open-close from the UI; and the full position
 cycle driven from the UI with wallet signing.
 
-**Not proven, and it matters:** **owner/agent separation.** Every agent-path proof
-so far was signed by an address that is *both* owner and agent, so no agent path
-has ever been refused for being the wrong caller. `ENotAgent` and `ESuspended` have
-never fired on mainnet. The access-control claim is currently reasoned rather than
-tested — which is why per-server agent identity is the recommended first move.
+**Not proven, and it matters:** **owner/agent separation.** The gates are covered by
+unit tests — the Move suite asserts `non_agent_aborts`, `suspended_policy_aborts`,
+the tick-width bounds and cap binding. What has never happened is a refusal **on
+mainnet, against a separate caller**: every agent-path proof so far was signed by an
+address that is *both* owner and agent, so `ENotAgent` and `ESuspended` have never
+fired on chain.
+
+Worth keeping straight, because the two are easily conflated: a unit test shows the
+gate is coded correctly; a mainnet refusal shows it is the thing standing between a
+hostile caller and the funds. Only the second is evidence about this deployment,
+which is why per-server agent identity is the recommended first move.
 
 **Also not proven:** a third-party MCP server returning bytes (the manifest and
 verification path is designed, not built), and the cron/interval strategy.

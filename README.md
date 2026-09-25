@@ -90,12 +90,15 @@ repository, in the server, or in any request.
 - owner actions from the UI: fund vault, set budget, venue open/close
 - the full position cycle driven from the UI with wallet-extension signing
 
-**Not proven, and it matters:** **owner/agent separation.** Every agent-path proof
-so far was signed by an address that is *both* owner and agent, so no agent path
-has ever been refused for being the wrong caller — `ENotAgent` and `ESuspended`
-have never fired on mainnet. The access-control claim is currently **reasoned
-rather than tested**, which is why per-server agent identity is the recommended
-first move in the [roadmap](docs/ROADMAP.md).
+**Not proven, and it matters:** **owner/agent separation.** The gates themselves
+are covered by unit tests — the Move suite asserts `non_agent_aborts`,
+`suspended_policy_aborts`, the tick-width bounds and cap binding. What has never
+happened is a refusal **on mainnet, against a genuinely separate caller**: every
+agent-path proof so far was signed by an address that is *both* owner and agent,
+so `ENotAgent` and `ESuspended` have never fired on chain. The separation is the
+product, and it is currently **unit-tested rather than demonstrated** — which is why
+per-server agent identity is the recommended first move in the
+[roadmap](docs/ROADMAP.md).
 
 ## What this is not
 
