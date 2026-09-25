@@ -159,6 +159,27 @@ are free, so the workaround is additive: new functions beside the old
 (`rebalance_with_rewards`, `redeem_with_rewards`, `deposit_liquidity_fix`),
 because a function also cannot be *removed* by an upgrade.
 
+**A `compatible` upgrade cannot change an existing struct's layout either.** From
+the upgrade docs: *"Your changes must be layout-compatible with the previous
+version. Existing struct layouts, including struct abilities, must remain the same.
+You can add new structs and functions."* So a new **field** cannot be added to
+`Policy`, `Vault`, `PositionGuard` or any published struct — which rules out the
+obvious way to add a per-policy setting.
+
+The escape is a **dynamic field**. Dynamic fields hang off the object's `UID` and
+are stored as separate objects, so they are not part of the struct layout and
+adding one is compatible. Use one when a shipped struct needs new per-object state:
+
+```move
+public struct SlippageKey has copy, drop, store {}   // a NEW struct: allowed
+
+dynamic_field::add(&mut policy.id, SlippageKey {}, bps);
+```
+
+Note the asymmetry that costs a day if forgotten: **structs are frozen, dynamic
+fields are not.** Anything the design says "we can just add later" has to be
+planned as a dynamic field, a separate object, or a new struct from the start.
+
 **Cetus refuses to close a position while rewards are owed.** `close_position`
 requires `is_empty`, which means zero liquidity AND zero both fee sides AND every
 reward at zero. A pool paying rewards therefore cannot be exited unless the
