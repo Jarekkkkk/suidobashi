@@ -292,6 +292,19 @@ $('poolBlock').onclick = () => ownerAction('venue', { hire: $('poolHire').value,
 // No amount field: the operation that matters is emptying the vault.
 $('withdraw').onclick = () => ownerAction('withdraw', {});
 
+// Hand the grant to a different address, and bound its price, in one transaction.
+// Until this runs, agent == owner, so no call can ever be refused as the wrong
+// caller and the caller gate is untestable.
+$('handOver').onclick = () => {
+  const agent = $('agentAddr').value.trim();
+  if (!agent) return say('paste the agent address first — the grant is handed to it', 'bad');
+  return ownerAction('repoint', {
+    hire: $('poolHire').value,
+    agent,
+    boundBps: $('agentBps').value.trim(),
+  });
+};
+
 // === the position cycle ===
 //
 // Open -> fund -> move the range -> exit. Every step is a wallet signature; the

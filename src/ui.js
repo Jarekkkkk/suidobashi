@@ -314,6 +314,29 @@ function actionFor(kind, body) {
       proposal: { action: 'withdraw the whole vault', destination: DEPLOYER },
     };
   }
+  if (kind === 'repoint') {
+    if (!body.hire || !(body.hire in HIRES)) return { error: 'unknown hire' };
+    const agent = String(body.agent || '').trim().toLowerCase();
+    if (!/^0x[0-9a-f]{64}$/.test(agent)) {
+      return { error: 'agent must be a full 0x address (64 hex characters)' };
+    }
+    // toMist parses any non-negative integer; a basis-point bound is a u64 too.
+    const bps = toMist(body.boundBps);
+    if (bps === null) return { error: 'boundBps must be a non-negative integer' };
+    // The chain refuses this too, but saying it here saves a signature.
+    if (bps > 500n) return { error: 'the policy refuses a bound above 500 bps' };
+
+    return {
+      script: 'node src/hire-agent.js --repoint',
+      env: { HIRE: body.hire, AGENT: agent, BOUND_BPS: String(bps) },
+      proposal: {
+        action: 'hand the grant to a different agent, and bound its price',
+        hire: body.hire,
+        agent,
+        boundBps: String(bps),
+      },
+    };
+  }
   return { error: `unknown action "${kind}"` };
 }
 
@@ -572,11 +595,16 @@ const PAGE = `<!doctype html>
   <span class="grp">swap pool <select id="poolHire"></select>
     <button class="ghost" id="poolAllow">Allow</button>
     <button class="ghost" id="poolBlock">Block</button></span>
+  <span class="grp">agent <input id="agentAddr" type="text" placeholder="0x…" size="10">
+    bound <input id="agentBps" type="text" value="5"> bps
+    <button class="ghost" id="handOver">Hand over</button></span>
   <span class="grp"><button class="ghost" id="withdraw">Withdraw all</button></span>
   <div class="legend">each of these asks the wallet to sign — nothing is signed by this page.
+    The hire selector above applies to both <b>swap pool</b> and <b>hand over</b>.
     <b>swap pool</b> is the Cetus pool a hire may trade on: it edits the policy's allowlist, and a
     new hire starts with none allowed. It does not stop the agent — use <b>Suspend</b> on the hire
-    below for that.</div>
+    below for that. <b>hand over</b> moves the grant to a different address and sets how far a swap
+    may move the price; the old agent loses every agent path, and the owner keeps every admin path.</div>
   <div class="msg" id="ownerMsg"></div>
 </div>
 

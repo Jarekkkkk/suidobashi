@@ -14,6 +14,15 @@
  *   phase B   CAP_ID=0x… AGENT=0x… BUDGET_MIST=10000000 node src/hire-agent.js --grant
  *   phase C   HIRE=cautious node src/hire-agent.js --allowlist
  *   phase C   allowlist a venue for the new policy (needs the policy id from B)
+ *   repoint   HIRE=standard AGENT=0x… BOUND_BPS=5 node src/hire-agent.js --repoint
+ *             hand an EXISTING grant to a different agent, and bound its price
+ *
+ * `--repoint` is one transaction because both setters take `&mut Policy` and
+ * `&OwnerCap`. Repointing rather than issuing a new policy keeps the cap, the
+ * allowance and the venue list: the grant moves, the money does not. It is also how
+ * the owner stops being their own agent, which is the only way the caller gate
+ * becomes testable — while agent == owner, no call can ever be refused as the wrong
+ * caller.
  *
  * A new hire starts with NO venue: the policy's pool allowlist is empty by design,
  * so it cannot trade until the owner opens one explicitly. Fail-closed is the
@@ -32,6 +41,7 @@ import { HIRES } from './hires.js';
 const MINT = process.argv.includes('--mint');
 const GRANT = process.argv.includes('--grant');
 const ALLOWLIST = process.argv.includes('--allowlist');
+const REPOINT = process.argv.includes('--repoint');
 const EMIT_BYTES = process.argv.includes('--emit-bytes');
 
 const AGENT = process.env.AGENT;
@@ -128,8 +138,35 @@ async function main() {
         tx.pure.bool((process.env.ALLOW ?? 'true') !== 'false'),
       ],
     });
+  } else if (REPOINT) {
+    phase = 'repoint';
+    if (!AGENT) throw new Error('AGENT is required for --repoint');
+    const hireName = process.env.HIRE;
+    const hire = hireName ? HIRES[hireName] : null;
+    if (!hire) throw new Error(`HIRE must be one of: ${Object.keys(HIRES).join(', ')}`);
+    const boundBps = BigInt(process.env.BOUND_BPS ?? '0');
+
+    const policyMut = tx.sharedObjectRef({
+      objectId: hire.policyId,
+      initialSharedVersion: hire.policySharedVersion,
+      mutable: true,
+    });
+
+    // Who may act. The old agent loses every agent path in the same instant, and
+    // the owner keeps every admin path — the OwnerCap is untouched.
+    tx.moveCall({
+      target: `${PACKAGE_LATEST_ID}::policy::set_agent`,
+      arguments: [policyMut, ownerCap, tx.pure.address(AGENT)],
+    });
+
+    // How far the price may move. Set in the same transaction so a grant is never
+    // briefly handed over without its bound.
+    tx.moveCall({
+      target: `${PACKAGE_LATEST_ID}::policy::set_max_slippage_bps`,
+      arguments: [policyMut, ownerCap, tx.pure.u64(boundBps)],
+    });
   } else {
-    throw new Error('pass --mint, --grant or --allowlist');
+    throw new Error('pass --mint, --grant, --allowlist or --repoint');
   }
 
   const bytes = await tx.build({ client });
@@ -148,6 +185,7 @@ async function main() {
     agent: AGENT ?? null,
     capId: CAP_ID ?? null,
     budgetMist: GRANT ? BUDGET_MIST.toString() : null,
+    boundBps: REPOINT ? String(process.env.BOUND_BPS ?? '0') : null,
     ok,
     status,
   }, null, 2));
