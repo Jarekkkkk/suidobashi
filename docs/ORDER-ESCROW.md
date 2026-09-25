@@ -56,10 +56,40 @@ gives the same non-discardable property across transactions.
 ## Lifecycle
 
 ```text
-create    maker escrows a coin, commits min_out and an expiry, shares the order
-settle    the agent fills it: swap, assert out >= min_out, route, consume the order
-refund    after expiry, anyone may trigger it; funds always return to the maker
+1  create    maker escrows a coin, commits min_out and an expiry, shares the order
+2  settle    the agent fills it: swap, assert out >= min_out, route the output,
+             then MARK the order settled — and leave it on chain
+3  burn      the maker reclaims the settled order's storage
+
+   refund    after expiry, anyone may trigger it; funds always return to the maker
 ```
+
+### Why the order survives settlement
+
+So the **storage rebate** can be reclaimed separately. Measured on chain:
+
+```text
+a minimal transaction          ~0.00024 SUI
+an object's storage rebate     ~0.0018 SUI
+```
+
+So a dedicated burn transaction costs about 0.00024 and returns about 0.0018. Burning
+inside `settle` would collect the same rebate at no extra cost — but it would go to
+the **settler**, not the maker. Keeping the object alive is what lets the maker take
+it instead, which is why `burn` is maker-gated: the rebate goes to whoever signs, and
+it is the maker's storage.
+
+Two consequences that are not optional:
+
+- **A `settled` marker.** The object survives, so a second settlement has to be
+  refused explicitly rather than relying on the object being gone. It is a **dynamic
+  field**, not a struct field, because `Order` is already published and a compatible
+  upgrade cannot change a struct's layout — the same constraint that put the slippage
+  bound in a dynamic field.
+- **The balance is emptied by splitting it out**, not by destructuring. An object
+  cannot be rebuilt from a destructured UID; Sui requires a UID to come from
+  `object::new`. So `settle` splits the whole balance out of the intact struct,
+  leaving the original at zero.
 
 ## What settle asserts
 
@@ -83,6 +113,7 @@ mistake as the venue allowlist, one layer down.
 | who settles | **the policy's agent** | keeps the grant, the agent and the demonstrated caller gate load-bearing. Loosening to permissionless is additive |
 | partial fills | **no** | all or nothing keeps `min_out` unambiguous |
 | refund trigger | **anyone**, after expiry | no order can sit with dead funds if the maker goes quiet |
+| storage rebate | **the maker**, via a separate burn | the rebate goes to whoever signs, and it is the maker's storage |
 | destination | fixed at create | the settler cannot redirect value, same rule as the policy |
 | policy dependency | agent gate + pool allowlist only | the order names its own pool, minimum and expiry |
 

@@ -291,3 +291,127 @@ fun an_expired_order_cannot_settle() {
     ts::return_shared(clk);
     s.end();
 }
+
+// === the storage-reclaim path ===
+//
+// A settled order now STAYS on chain, so its storage can be reclaimed later. That
+// means the marker and the burn both need testing, and the burn is what pays: the
+// rebate goes to whoever signs it, which is why it is maker-gated.
+
+/// A fresh order is not settled. `settled()` reads a dynamic field, because the
+/// struct layout is frozen and a `settled` bool is not available.
+#[test]
+fun a_fresh_order_is_not_settled() {
+    let mut s = ts::begin(MAKER);
+    share_clock(&mut s, NOW_MS);
+
+    s.next_tx(MAKER);
+    let clk = ts::take_shared<Clock>(&s);
+    let order_id = order::create<OrderTestCoin>(
+        coin::mint_for_testing<OrderTestCoin>(1_000, s.ctx()),
+        pool_a(), 900, LATER_MS, MAKER, &clk, s.ctx(),
+    );
+    ts::return_shared(clk);
+
+    s.next_tx(MAKER);
+    {
+        let o = ts::take_shared_by_id<order::Order<OrderTestCoin>>(&s, order_id);
+        assert!(!order::settled(&o));
+        ts::return_shared(o);
+    };
+    s.end();
+}
+
+/// The marker is what stops a second settlement, so it has to actually stick.
+#[test]
+fun marking_an_order_settled_is_observable() {
+    let mut s = ts::begin(MAKER);
+    share_clock(&mut s, NOW_MS);
+
+    s.next_tx(MAKER);
+    let clk = ts::take_shared<Clock>(&s);
+    let order_id = order::create<OrderTestCoin>(
+        coin::mint_for_testing<OrderTestCoin>(1_000, s.ctx()),
+        pool_a(), 900, LATER_MS, MAKER, &clk, s.ctx(),
+    );
+    ts::return_shared(clk);
+
+    s.next_tx(MAKER);
+    {
+        let mut o = ts::take_shared_by_id<order::Order<OrderTestCoin>>(&s, order_id);
+        order::mark_settled_for_testing(&mut o);
+        assert!(order::settled(&o));
+        ts::return_shared(o);
+    };
+    s.end();
+}
+
+/// Burning an order that was never filled would destroy escrowed funds.
+#[test]
+#[expected_failure(abort_code = order::ENotSettled)]
+fun burning_an_unsettled_order_aborts() {
+    let mut s = ts::begin(MAKER);
+    share_clock(&mut s, NOW_MS);
+
+    s.next_tx(MAKER);
+    let clk = ts::take_shared<Clock>(&s);
+    let order_id = order::create<OrderTestCoin>(
+        coin::mint_for_testing<OrderTestCoin>(1_000, s.ctx()),
+        pool_a(), 900, LATER_MS, MAKER, &clk, s.ctx(),
+    );
+    ts::return_shared(clk);
+
+    s.next_tx(MAKER);
+    let o = ts::take_shared_by_id<order::Order<OrderTestCoin>>(&s, order_id);
+    order::burn(o, s.ctx());
+    s.end();
+}
+
+/// The rebate goes to whoever signs, so this is the maker's and nobody else's.
+#[test]
+#[expected_failure(abort_code = order::ENotMaker)]
+fun a_stranger_cannot_reclaim_the_storage() {
+    let mut s = ts::begin(MAKER);
+    share_clock(&mut s, NOW_MS);
+
+    s.next_tx(MAKER);
+    let clk = ts::take_shared<Clock>(&s);
+    let order_id = order::create<OrderTestCoin>(
+        coin::mint_for_testing<OrderTestCoin>(1_000, s.ctx()),
+        pool_a(), 900, LATER_MS, MAKER, &clk, s.ctx(),
+    );
+    ts::return_shared(clk);
+
+    s.next_tx(STRANGER);
+    let o = ts::take_shared_by_id<order::Order<OrderTestCoin>>(&s, order_id);
+    order::burn(o, s.ctx());
+    s.end();
+}
+
+/// The happy path: marked, empty, and the maker reclaims it.
+#[test]
+fun the_maker_can_reclaim_a_settled_order() {
+    let mut s = ts::begin(MAKER);
+    share_clock(&mut s, NOW_MS);
+
+    s.next_tx(MAKER);
+    let clk = ts::take_shared<Clock>(&s);
+    let order_id = order::create<OrderTestCoin>(
+        coin::mint_for_testing<OrderTestCoin>(1_000, s.ctx()),
+        pool_a(), 900, LATER_MS, MAKER, &clk, s.ctx(),
+    );
+    ts::return_shared(clk);
+
+    // Marked and emptied, which is the state `settle_*` leaves behind.
+    s.next_tx(MAKER);
+    {
+        let mut o = ts::take_shared_by_id<order::Order<OrderTestCoin>>(&s, order_id);
+        order::mark_settled_for_testing(&mut o);
+        ts::return_shared(o);
+    };
+
+    s.next_tx(MAKER);
+    let o = ts::take_shared_by_id<order::Order<OrderTestCoin>>(&s, order_id);
+    order::burn(o, s.ctx());
+    s.end();
+}

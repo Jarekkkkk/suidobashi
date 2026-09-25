@@ -21,6 +21,7 @@ use sui_tokyo::policy::{Self, Policy};
 use sui::balance::{Self, Balance};
 use sui::clock::Clock;
 use sui::coin::{Self, Coin};
+use sui::dynamic_field;
 use sui::event;
 
 #[error]
@@ -39,6 +40,20 @@ const EBelowMinimum: vector<u8> = "output is below the maker's minimum";
 const EZeroMinOut: vector<u8> = "min_out must be greater than zero";
 #[error]
 const EZeroAmount: vector<u8> = "amount_in must be greater than zero";
+#[error]
+const EAlreadySettled: vector<u8> = "order has already been settled";
+#[error]
+const ENotSettled: vector<u8> = "order has not been settled";
+#[error]
+const ENotMaker: vector<u8> = "only the maker may reclaim this order's storage";
+
+/// Dynamic-field key marking an order as filled.
+///
+/// A dynamic field rather than a `settled` field on `Order`, and that is forced:
+/// the struct is already published, and a compatible upgrade cannot change an
+/// existing struct's layout. The same constraint that put the slippage bound in a
+/// dynamic field applies here.
+public struct SettledKey has copy, drop, store {}
 
 /// A maker's swap commitment: funds escrowed, minimum committed, expiring.
 ///
@@ -96,6 +111,12 @@ public struct OrderRefunded has copy, drop {
     maker: address,
     amount: u64,
     refunded_by: address,
+}
+
+public struct OrderBurned has copy, drop {
+    order_id: ID,
+    maker: address,
+    burned_by: address,
 }
 
 // === Maker side ===
@@ -170,7 +191,7 @@ public fun refund<CoinType>(order: Order<CoinType>, clock: &Clock, ctx: &mut TxC
 /// Fill an order whose coin is side A of the pool. Agent-gated.
 public fun settle_a2b<A, B>(
     policy: &Policy,
-    order: Order<A>,
+    mut order: Order<A>,
     config: &GlobalConfig,
     pool: &mut Pool<A, B>,
     sqrt_price_limit: u128,
@@ -178,8 +199,22 @@ public fun settle_a2b<A, B>(
     ctx: &mut TxContext,
 ) {
     assert_settleable(policy, order.pool_id, object::id(pool), order.expires_at_ms, clock, ctx);
-    let (funds, destination, min_out, order_id, maker) = unpack(order);
-    let amount_in = funds.value();
+    // A settled order now STAYS on chain so its storage can be reclaimed later,
+    // which means a second attempt has to be refused explicitly rather than relying
+    // on the object being gone.
+    assert!(!is_settled(&order), EAlreadySettled);
+
+    let order_id = order.id.to_inner();
+    let maker = order.maker;
+    let destination = order.destination;
+    let min_out = order.min_out;
+
+    // The funds come out by SPLIT, not by destructuring. An object cannot be rebuilt
+    // from a destructured UID -- Sui requires the UID to come from `object::new` --
+    // so the struct has to stay intact, and splitting the full value leaves the
+    // original balance at zero.
+    let amount_in = order.funds.value();
+    let funds = order.funds.split(amount_in);
 
     let (remainder, output) = policy::swap_balance_a2b<A, B>(
         funds, config, pool, amount_in, sqrt_price_limit, clock,
@@ -192,16 +227,20 @@ public fun settle_a2b<A, B>(
     transfer::public_transfer(coin::from_balance(remainder, ctx), destination);
     transfer::public_transfer(coin::from_balance(output, ctx), destination);
 
+    // Marked and re-shared. The balance is already zero, so a settled order holds
+    // nothing even if someone reaches it again.
+    dynamic_field::add(&mut order.id, SettledKey {}, true);
+    transfer::share_object(order);
+
     event::emit(OrderSettled {
-        order_id, maker, settler: ctx.sender(), pool_id: object::id(pool),
-        amount_in, amount_out, min_out, destination,
+        order_id, maker, settler: ctx.sender(), pool_id: object::id(pool), amount_in, amount_out, min_out, destination,
     });
 }
 
 /// Fill an order whose coin is side B of the pool. Agent-gated.
 public fun settle_b2a<A, B>(
     policy: &Policy,
-    order: Order<B>,
+    mut order: Order<B>,
     config: &GlobalConfig,
     pool: &mut Pool<A, B>,
     sqrt_price_limit: u128,
@@ -209,8 +248,15 @@ public fun settle_b2a<A, B>(
     ctx: &mut TxContext,
 ) {
     assert_settleable(policy, order.pool_id, object::id(pool), order.expires_at_ms, clock, ctx);
-    let (funds, destination, min_out, order_id, maker) = unpack(order);
-    let amount_in = funds.value();
+    assert!(!is_settled(&order), EAlreadySettled);
+
+    let order_id = order.id.to_inner();
+    let maker = order.maker;
+    let destination = order.destination;
+    let min_out = order.min_out;
+
+    let amount_in = order.funds.value();
+    let funds = order.funds.split(amount_in);
 
     let (remainder, output) = policy::swap_balance_b2a<A, B>(
         funds, config, pool, amount_in, sqrt_price_limit, clock,
@@ -221,9 +267,11 @@ public fun settle_b2a<A, B>(
     transfer::public_transfer(coin::from_balance(remainder, ctx), destination);
     transfer::public_transfer(coin::from_balance(output, ctx), destination);
 
+    dynamic_field::add(&mut order.id, SettledKey {}, true);
+    transfer::share_object(order);
+
     event::emit(OrderSettled {
-        order_id, maker, settler: ctx.sender(), pool_id: object::id(pool),
-        amount_in, amount_out, min_out, destination,
+        order_id, maker, settler: ctx.sender(), pool_id: object::id(pool), amount_in, amount_out, min_out, destination,
     });
 }
 
@@ -264,15 +312,51 @@ public fun assert_settleable_for_testing(
     assert_settleable(policy, order_pool_id, pool_id, expires_at_ms, clock, ctx)
 }
 
-/// Consume the order and hand back what the caller needs. The destructuring is the
-/// point: it is only possible once, so a settled order cannot be settled again.
-fun unpack<CoinType>(order: Order<CoinType>): (Balance<CoinType>, address, u64, ID, address) {
+/// Mark an order settled AND empty it, so the burn path can be tested without a live
+/// Cetus pool. The real marking and emptying happen inside `settle_*`, which needs
+/// one. Emptying matters: `burn` refuses an order that still holds funds, because
+/// burning one would destroy them.
+#[test_only]
+public fun mark_settled_for_testing<CoinType>(order: &mut Order<CoinType>) {
+    dynamic_field::add(&mut order.id, SettledKey {}, true);
+    let amount = order.funds.value();
+    balance::destroy_for_testing(order.funds.split(amount));
+}
+
+/// Whether the order has been filled. Read through a dynamic field, because the
+/// struct layout is frozen and a `settled` field is not available.
+fun is_settled<CoinType>(order: &Order<CoinType>): bool {
+    dynamic_field::exists(&order.id, SettledKey {})
+}
+
+/// Reclaim the storage of a settled order. Maker-gated.
+///
+/// The storage rebate goes to whoever signs this, which is exactly why it is the
+/// MAKER and nobody else: it is their storage. Burning inside `settle` would collect
+/// the same rebate at no extra cost, but it would go to the SETTLER instead — so the
+/// burn is deliberately a separate step, and the maker decides when to spend a
+/// transaction reclaiming it.
+///
+/// A settled order holds nothing, but this checks rather than assumes: burning an
+/// object that still held funds would destroy them silently.
+public fun burn<CoinType>(order: Order<CoinType>, ctx: &mut TxContext) {
     let Order<CoinType> {
-        id, maker, destination, funds, pool_id: _, min_out, expires_at_ms: _,
+        id, maker, destination: _, funds, pool_id: _, min_out: _, expires_at_ms: _,
     } = order;
+
+    assert!(ctx.sender() == maker, ENotMaker);
+    assert!(funds.value() == 0, ENotSettled);
+    balance::destroy_zero(funds);
+
     let order_id = id.to_inner();
-    object::delete(id);
-    (funds, destination, min_out, order_id, maker)
+    let mut uid = id;
+    assert!(dynamic_field::exists(&uid, SettledKey {}), ENotSettled);
+    // The marker has to come off before the object can be deleted: an object with a
+    // live dynamic field cannot be destroyed.
+    dynamic_field::remove<SettledKey, bool>(&mut uid, SettledKey {});
+    object::delete(uid);
+
+    event::emit(OrderBurned { order_id, maker, burned_by: ctx.sender() });
 }
 
 // === Read-only accessors ===
@@ -283,3 +367,7 @@ public fun amount_in<CoinType>(order: &Order<CoinType>): u64 { order.funds.value
 public fun min_out<CoinType>(order: &Order<CoinType>): u64 { order.min_out }
 public fun pool_id<CoinType>(order: &Order<CoinType>): ID { order.pool_id }
 public fun expires_at_ms<CoinType>(order: &Order<CoinType>): u64 { order.expires_at_ms }
+
+/// Whether this order has already been filled. Exposed because the order survives
+/// settlement now, so "has it been used" is a question callers need to ask.
+public fun settled<CoinType>(order: &Order<CoinType>): bool { is_settled(order) }
