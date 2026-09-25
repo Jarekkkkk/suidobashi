@@ -21,7 +21,7 @@
  */
 import 'dotenv/config';
 import {
-  PACKAGE_V2_ID, VAULT_ID, OWNER_CAP_ID, POOL_ID, GLOBAL_CONFIG_ID,
+  PACKAGE_LATEST_ID, VAULT_ID, OWNER_CAP_ID, POOL_ID, GLOBAL_CONFIG_ID,
   USDC_TYPE, SUI_TYPE, POOL_TICK_SPACING,
   POOL_SHARED_VERSION, GLOBAL_CONFIG_SHARED_VERSION,
   DEPLOYER,
@@ -53,7 +53,7 @@ async function main() {
   tx.setSender(sender);
 
   tx.moveCall({
-    target: `${PACKAGE_V2_ID}::position_guard::create`,
+    target: `${PACKAGE_LATEST_ID}::position_guard::create`,
     // Pool<CoinTypeA, CoinTypeB> is Pool<USDC, SUI>.
     typeArguments: [USDC_TYPE, SUI_TYPE],
     arguments: [
@@ -91,7 +91,7 @@ async function main() {
   console.log(JSON.stringify({
     mode: 'dry-run',
     step: 'position_guard::create',
-    package: PACKAGE_V2_ID,
+    package: PACKAGE_LATEST_ID,
     sender,
     pool: POOL_ID,
     tickLower: TICK_LOWER,

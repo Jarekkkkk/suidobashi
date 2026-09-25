@@ -17,7 +17,7 @@
  */
 import 'dotenv/config';
 
-const PACKAGE_ID = '0x2441fb74d7684f43019fdabf27d6de24dc8e42826ddd86ba07bc21aded80c014';
+const PACKAGE_LATEST_ID = '0x2441fb74d7684f43019fdabf27d6de24dc8e42826ddd86ba07bc21aded80c014';
 const SUI_TYPE = '0x2::sui::SUI';
 
 const EXECUTE = process.argv.includes('--execute');
@@ -57,7 +57,7 @@ async function main() {
 
   // 1. Create the vault and its owner cap.
   const [vault, ownerCap] = tx.moveCall({
-    target: `${PACKAGE_ID}::spend_vault::new`,
+    target: `${PACKAGE_LATEST_ID}::spend_vault::new`,
   });
 
   // 2. Fund it from the sender's live address balance. No coin objects exist to
@@ -70,7 +70,7 @@ async function main() {
     arguments: [withdrawal],
   });
   tx.moveCall({
-    target: `${PACKAGE_ID}::spend_vault::deposit_balance`,
+    target: `${PACKAGE_LATEST_ID}::spend_vault::deposit_balance`,
     typeArguments: [SUI_TYPE],
     arguments: [vault, funds],
   });
@@ -78,13 +78,13 @@ async function main() {
   // 3. Mint the spender cap. Its ID is read off the effects after execution and
   //    used in phase B, since the PTB VM cannot compute it in-flight.
   const cap = tx.moveCall({
-    target: `${PACKAGE_ID}::spend_vault::mint_cap`,
+    target: `${PACKAGE_LATEST_ID}::spend_vault::mint_cap`,
     arguments: [vault, ownerCap],
   });
 
   // 4. Share the vault so the agent can reach it later.
   tx.moveCall({
-    target: `${PACKAGE_ID}::spend_vault::share`,
+    target: `${PACKAGE_LATEST_ID}::spend_vault::share`,
     arguments: [vault],
   });
 

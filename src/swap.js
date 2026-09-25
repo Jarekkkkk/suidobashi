@@ -21,7 +21,7 @@
  */
 import 'dotenv/config';
 import {
-  PACKAGE_ID, VAULT_ID, POLICY_ID, POOL_ID, GLOBAL_CONFIG_ID, CLOCK_ID,
+  PACKAGE_LATEST_ID, VAULT_ID, POLICY_ID, POOL_ID, GLOBAL_CONFIG_ID, CLOCK_ID,
   SUI_TYPE, USDC_TYPE, SWAP_AMOUNT_MIST, SLIPPAGE_BPS,
   VAULT_SHARED_VERSION, POLICY_SHARED_VERSION, CLOCK_SHARED_VERSION,
   POOL_SHARED_VERSION, GLOBAL_CONFIG_SHARED_VERSION, DEPLOYER,
@@ -53,6 +53,20 @@ async function main() {
     baseUrl: 'https://fullnode.mainnet.sui.io:443',
   });
 
+  // Refuse before building when the vault cannot cover the swap.
+  //
+  // Without this the failure surfaces as `InsufficientGas` from the resolver, which
+  // points at the wrong thing entirely: a simulation that cannot complete yields no
+  // gas estimate, and the resolver reports the missing estimate rather than the
+  // missing funds. Same reasoning as deposit-liquidity.js, which checks its funds
+  // before building for exactly this reason.
+  const vaultBal = await client.getBalance({ owner: VAULT_ID, coinType: SUI_TYPE });
+  const held = BigInt(vaultBal.balance?.balance ?? 0);
+  if (held < AMOUNT_MIST) {
+    throw new Error(`cannot swap ${AMOUNT_MIST} — the vault holds ${held}. `
+      + 'Fund the vault first: the swap draws from the vault, not from the wallet.');
+  }
+
   // Read the pool's live price. The limit is a bound relative to now, so a stale
   // constant would either abort immediately or grant more slippage than intended.
   const poolObj = await client.getObject({ objectId: POOL_OVERRIDE, include: { json: true } });
@@ -67,7 +81,7 @@ async function main() {
   tx.setSender(sender);
 
   tx.moveCall({
-    target: `${PACKAGE_ID}::policy::swap_and_route`,
+    target: `${PACKAGE_LATEST_ID}::policy::swap_and_route`,
     // Pool<A, B> is Pool<USDC, SUI>.
     typeArguments: [USDC_TYPE, SUI_TYPE],
     arguments: [

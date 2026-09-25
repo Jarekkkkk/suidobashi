@@ -6,31 +6,36 @@
  * and the object ID are the same string.
  */
 
-export const PACKAGE_ID =
-  '0x2441fb74d7684f43019fdabf27d6de24dc8e42826ddd86ba07bc21aded80c014';
-
-export const UPGRADE_CAP_ID =
-  '0x50a57fce03614745395e2a9e1aac204cfd0f7979532106669066283898b97ec9';
-
 /**
- * Version 2 of the package. A module added in an upgrade is callable ONLY at the
- * new version id — the original id resolves to the version that first defined a
- * module. So `policy` and `spend_vault` are callable at PACKAGE_ID, but
- * `position_guard` must be called at the newest version id. Object *types* keep
- * the original-id identity either way, so an OwnerCap minted before any upgrade
- * still matches.
- */
-export const PACKAGE_V2_ID =
-  '0xbaf5205c0e5b8aeea6117a31e9b5e47af73e220ed58f32c2256f0e708cb2db9f';
-
-/**
- * Version 3 — adds the reward-aware variants. `rebalance` and `redeem` could not
- * gain a `RewardType` parameter in place, because the `compatible` upgrade policy
- * forbids changing an existing public function's signature. So the fix is
- * additive: `rebalance_with_rewards`, `redeem_with_rewards`, `deposit_liquidity_fix`.
+ * The package id EVERY module call uses.
+ *
+ * One id, deliberately. Each upgrade publishes a separate package object, and a call
+ * runs the bytecode of the id it names -- so calling an older id runs older logic.
+ * That is not theoretical here: `swap_and_route` gained a slippage bound in version
+ * 4, and a caller still pointing at version 1 runs the unbounded body and never
+ * consults it. One constant removes the choice.
+ *
+ * Earlier ids are deliberately NOT exported. They are dead, and a stale reference to
+ * one is a silent downgrade rather than an error. The history lives in
+ * move/Published.toml (`original-id` plus the version chain) and in NOTES.md.
+ *
+ *   v1  0x2441fb74…  original — object TYPES still bind to this id
+ *   v2  0xbaf5205c…  added position_guard
+ *   v3  0x0517705e…  added the reward-aware variants
+ *   v4  0x859e239f…  slippage bound + idempotent set_pool_allowed
+ *
+ * Object types keep their original-id identity across upgrades, so an OwnerCap
+ * minted before any of this still matches the newest code.
  */
 export const PACKAGE_LATEST_ID =
-  '0x0517705e1bd75f18c586b9a243a2608bda489420ca9d2308adbe2199fab999d7';
+  '0x859e239f3507305d8cddcd5b5a236acd33c96d85db74e840556a8bc81f0ae84e';
+
+/**
+ * The UpgradeCap, for running an upgrade from the CLI. Not referenced by any code
+ * path: no script should ever hold it.
+ */
+export const UPGRADE_CAP_ID =
+  '0x50a57fce03614745395e2a9e1aac204cfd0f7979532106669066283898b97ec9';
 
 /** The pinned SUI/USDC pool's tick spacing — ranges must be aligned to it. */
 export const POOL_TICK_SPACING = 10;

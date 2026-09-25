@@ -13,7 +13,7 @@
  *   HIRE=cautious SUSPEND=false node src/set-suspended.js
  */
 import 'dotenv/config';
-import { PACKAGE_ID, OWNER_CAP_ID, DEPLOYER } from './addresses.js';
+import { PACKAGE_LATEST_ID, OWNER_CAP_ID, DEPLOYER } from './addresses.js';
 import { HIRES, getHire } from './hires.js';
 
 const EMIT_BYTES = process.argv.includes('--emit-bytes');
@@ -41,7 +41,7 @@ async function main() {
   // The hire is a generic Policy<phantom A, phantom B>? No — `policy` is untyped,
   // so no type arguments are needed for the admin calls.
   tx.moveCall({
-    target: `${PACKAGE_ID}::policy::set_suspended`,
+    target: `${PACKAGE_LATEST_ID}::policy::set_suspended`,
     arguments: [
       tx.sharedObjectRef({
         objectId: hire.policyId,

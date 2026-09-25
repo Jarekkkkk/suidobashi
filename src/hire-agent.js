@@ -24,7 +24,7 @@
  */
 import 'dotenv/config';
 import {
-  PACKAGE_ID, VAULT_ID, OWNER_CAP_ID, POOL_ID, CLOCK_ID, SUI_TYPE,
+  PACKAGE_LATEST_ID, VAULT_ID, OWNER_CAP_ID, POOL_ID, CLOCK_ID, SUI_TYPE,
   VAULT_SHARED_VERSION, CLOCK_SHARED_VERSION, DEPLOYER,
 } from './addresses.js';
 import { HIRES } from './hires.js';
@@ -64,7 +64,7 @@ async function main() {
     // Phase A: a fresh bearer cap for the new hire. Returned to the owner, who
     // passes it into phase B where the policy consumes and embeds it.
     const cap = tx.moveCall({
-      target: `${PACKAGE_ID}::spend_vault::mint_cap`,
+      target: `${PACKAGE_LATEST_ID}::spend_vault::mint_cap`,
       arguments: [vaultMut, ownerCap],
     });
     tx.transferObjects([cap], sender);
@@ -76,7 +76,7 @@ async function main() {
     // The hire's ceiling. Independent of every other hire, because the OZ ledger
     // is keyed by (cap_id, coin_type).
     tx.moveCall({
-      target: `${PACKAGE_ID}::spend_vault::set_allowance`,
+      target: `${PACKAGE_LATEST_ID}::spend_vault::set_allowance`,
       typeArguments: [SUI_TYPE],
       arguments: [
         vaultMut,
@@ -94,7 +94,7 @@ async function main() {
     // The hire itself. `create` consumes the cap by value and embeds it, so after
     // this the agent's authority is reachable only through the policy's gates.
     tx.moveCall({
-      target: `${PACKAGE_ID}::policy::create`,
+      target: `${PACKAGE_LATEST_ID}::policy::create`,
       arguments: [
         tx.sharedObjectRef({
           objectId: VAULT_ID, initialSharedVersion: VAULT_SHARED_VERSION, mutable: false,
@@ -116,7 +116,7 @@ async function main() {
     const venue = process.env.VENUE || POOL_ID;
 
     tx.moveCall({
-      target: `${PACKAGE_ID}::policy::set_pool_allowed`,
+      target: `${PACKAGE_LATEST_ID}::policy::set_pool_allowed`,
       arguments: [
         tx.sharedObjectRef({
           objectId: hire.policyId,

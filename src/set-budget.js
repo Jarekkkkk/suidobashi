@@ -19,7 +19,7 @@
  */
 import 'dotenv/config';
 import {
-  PACKAGE_ID, VAULT_ID, OWNER_CAP_ID, CLOCK_ID, SUI_TYPE,
+  PACKAGE_LATEST_ID, VAULT_ID, OWNER_CAP_ID, CLOCK_ID, SUI_TYPE,
   VAULT_SHARED_VERSION, CLOCK_SHARED_VERSION, DEPLOYER,
 } from './addresses.js';
 import { HIRES, DEFAULT_HIRE, HIRE_NAMES } from './hires.js';
@@ -59,7 +59,7 @@ async function main() {
   tx.setSender(sender);
 
   tx.moveCall({
-    target: `${PACKAGE_ID}::spend_vault::set_allowance`,
+    target: `${PACKAGE_LATEST_ID}::spend_vault::set_allowance`,
     typeArguments: [SUI_TYPE],
     arguments: [
       tx.sharedObjectRef({

@@ -14,7 +14,7 @@
  */
 import 'dotenv/config';
 import {
-  PACKAGE_ID, VAULT_ID, POLICY_ID, CLOCK_ID, SUI_TYPE,
+  PACKAGE_LATEST_ID, VAULT_ID, POLICY_ID, CLOCK_ID, SUI_TYPE,
   VAULT_SHARED_VERSION, POLICY_SHARED_VERSION, CLOCK_SHARED_VERSION, DEPLOYER,
 } from './addresses.js';
 
@@ -37,7 +37,7 @@ async function main() {
   tx.setSender(sender);
 
   tx.moveCall({
-    target: `${PACKAGE_ID}::policy::spend_to_destination`,
+    target: `${PACKAGE_LATEST_ID}::policy::spend_to_destination`,
     typeArguments: [SUI_TYPE],
     arguments: [
       tx.sharedObjectRef({

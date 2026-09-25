@@ -12,7 +12,7 @@
  */
 import 'dotenv/config';
 import {
-  PACKAGE_ID, VAULT_ID, POLICY_ID, OWNER_CAP_ID, POOL_ID, CLOCK_ID, SUI_TYPE,
+  PACKAGE_LATEST_ID, VAULT_ID, POLICY_ID, OWNER_CAP_ID, POOL_ID, CLOCK_ID, SUI_TYPE,
   VAULT_SHARED_VERSION, POLICY_SHARED_VERSION, CLOCK_SHARED_VERSION,
   SWAP_AMOUNT_MIST, DEPLOYER,
 } from './addresses.js';
@@ -47,14 +47,14 @@ async function main() {
   // 1. Open the venue. Pools start closed, so this is the step that makes the
   //    agent's swap possible at all.
   tx.moveCall({
-    target: `${PACKAGE_ID}::policy::set_pool_allowed`,
+    target: `${PACKAGE_LATEST_ID}::policy::set_pool_allowed`,
     arguments: [policyMut, ownerCap, tx.pure.id(POOL_ID), tx.pure.bool(true)],
   });
 
   // 2. Raise the budget to the swap size. Overwrites the entry in place; the
   //    cap id is unchanged, which is the point of the cap-keyed ledger.
   tx.moveCall({
-    target: `${PACKAGE_ID}::spend_vault::set_allowance`,
+    target: `${PACKAGE_LATEST_ID}::spend_vault::set_allowance`,
     typeArguments: [SUI_TYPE],
     arguments: [
       vaultMut,

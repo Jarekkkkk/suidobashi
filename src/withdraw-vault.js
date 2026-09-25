@@ -27,7 +27,7 @@
  */
 import 'dotenv/config';
 import {
-  PACKAGE_ID, VAULT_ID, OWNER_CAP_ID, SUI_TYPE,
+  PACKAGE_LATEST_ID, VAULT_ID, OWNER_CAP_ID, SUI_TYPE,
   VAULT_SHARED_VERSION, DEPLOYER,
 } from './addresses.js';
 
@@ -73,7 +73,7 @@ async function main() {
   tx.setSender(sender);
 
   const funds = tx.moveCall({
-    target: `${PACKAGE_ID}::spend_vault::withdraw`,
+    target: `${PACKAGE_LATEST_ID}::spend_vault::withdraw`,
     typeArguments: [SUI_TYPE],
     arguments: [
       tx.sharedObjectRef({
