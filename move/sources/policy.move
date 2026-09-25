@@ -36,6 +36,7 @@ use sui_tokyo::spend_vault::{Self, OwnerCap, SpenderCap, Vault};
 use sui::balance::{Self, Balance};
 use sui::clock::Clock;
 use sui::coin;
+use sui::dynamic_field;
 use sui::dynamic_object_field;
 use sui::event;
 use sui::vec_set::{Self, VecSet};
@@ -50,6 +51,22 @@ const EWrongVault: vector<u8> = "vault does not match policy binding";
 const EWrongOwnerCap: vector<u8> = "OwnerCap does not match policy vault";
 #[error]
 const EPoolNotAllowed: vector<u8> = "pool is not on the policy allowlist";
+#[error]
+const ESlippageOutOfBound: vector<u8> = "the price limit moves the price further than this policy allows";
+#[error]
+const ESlippageTooLoose: vector<u8> = "slippage bound is above the ceiling this policy allows";
+
+/// Ceiling on the owner's slippage bound, in basis points of PRICE. 500 bps is 5%,
+/// already far looser than any sane swap, so this exists only to stop a
+/// fat-fingered value from quietly switching the bound off.
+const MAX_SLIPPAGE_BPS_CEILING: u64 = 500;
+
+/// Dynamic-field key under which the slippage bound is stored.
+///
+/// A dynamic field rather than a `Policy` field, and that is forced: a compatible
+/// upgrade cannot change an existing struct's layout, only add new structs and
+/// functions. Anything the policy needs to carry from here on arrives this way.
+public struct SlippageKey has copy, drop, store {}
 
 /// Dynamic-object-field key under which the SpenderCap is embedded.
 public struct CapKey has copy, drop, store {}
@@ -191,6 +208,31 @@ public fun set_pool_allowed(policy: &mut Policy, owner_cap: &OwnerCap, pool_id: 
     emit_updated(policy);
 }
 
+/// Set the bound on how far a swap may move the price, in basis points of PRICE.
+///
+/// Owner-gated, and an upsert. Three states, deliberately distinct:
+///
+///   absent   no bound. This is how a live policy starts, so introducing the bound
+///            changes nothing until the owner opts in.
+///   `0`      the bound is explicitly off. A deliberate act, not a default.
+///   `n > 0`  the price may move at most `n` basis points in either direction.
+///
+/// The ceiling is not a policy decision, it is a guard against a typo: without it,
+/// `10_000` would mean "no limit" while looking like a number someone chose.
+public fun set_max_slippage_bps(policy: &mut Policy, owner_cap: &OwnerCap, bps: u64) {
+    assert_binding(policy, owner_cap);
+    assert!(bps <= MAX_SLIPPAGE_BPS_CEILING, ESlippageTooLoose);
+
+    if (dynamic_field::exists(&policy.id, SlippageKey {})) {
+        let slot = dynamic_field::borrow_mut<SlippageKey, u64>(&mut policy.id, SlippageKey {});
+        *slot = bps;
+    } else {
+        dynamic_field::add(&mut policy.id, SlippageKey {}, bps);
+    };
+
+    emit_updated(policy);
+}
+
 // === Agent paths ===
 
 /// Draw `amount` of `C` from the OZ budget behind the embedded cap and send the
@@ -247,6 +289,12 @@ public fun swap_and_route<A, B>(
 ) {
     assert_agent_gates(policy, vault, ctx);
     assert!(policy.allowed_pools.contains(&object::id(pool)), EPoolNotAllowed);
+    // The caller supplies `sqrt_price_limit`, so without this the agent chooses its
+    // own price tolerance. It is the one term of the trade the policy could not
+    // previously bound: who, where, how much and where-to were all enforced, and the
+    // rate was not. A bounded pool is the difference between a hostile agent wasting
+    // gas and a hostile agent extracting value at a price of its choosing.
+    assert_slippage_in_bound(policy, pool, sqrt_price_limit);
 
     let destination = policy.destination;
     let cap = dynamic_object_field::borrow<CapKey, SpenderCap>(&policy.id, CapKey {});
@@ -344,6 +392,49 @@ fun assert_agent_gates(policy: &Policy, vault: &Vault, ctx: &TxContext) {
     assert!(object::id(vault) == policy.vault_id, EWrongVault);
 }
 
+/// Bound how far a swap may move the price.
+///
+/// The pool quotes price as a square root and the limit arrives in that same unit,
+/// so this squares both sides rather than converting either one. That is exact, and
+/// it avoids tick arithmetic entirely -- which matters, because the tick helpers all
+/// speak `integer_mate::i32`, a TRANSITIVE dependency this package cannot name.
+/// `u256` is required because the square of a `u128` sqrt price overflows `u128`:
+/// the maximum is about 7.9e28 and its square is 6.2e57.
+///
+/// Never set means unbounded, so adding this changes no existing policy's behaviour.
+fun assert_slippage_in_bound<A, B>(
+    policy: &Policy,
+    pool: &Pool<A, B>,
+    sqrt_price_limit: u128,
+) {
+    if (!dynamic_field::exists(&policy.id, SlippageKey {})) return;
+    let bps = *dynamic_field::borrow<SlippageKey, u64>(&policy.id, SlippageKey {});
+    if (bps == 0) return;
+
+    assert_within_bps(cetus_pool::current_sqrt_price(pool), sqrt_price_limit, bps);
+}
+
+/// The arithmetic, separated from the state lookup so it can be tested directly.
+/// Testing it through `swap_and_route` would need a live Cetus pool; this needs two
+/// numbers, and the arithmetic is the part that can actually be wrong.
+///
+/// price is proportional to sqrt_price squared, so comparing squares compares prices,
+/// and the bound stays in basis points of PRICE rather than of its root.
+fun assert_within_bps(now_sqrt: u128, limit_sqrt: u128, bps: u64) {
+    let now_sq: u256 = (now_sqrt as u256) * (now_sqrt as u256);
+    let limit_sq: u256 = (limit_sqrt as u256) * (limit_sqrt as u256);
+
+    let diff: u256 = if (limit_sq > now_sq) { limit_sq - now_sq } else { now_sq - limit_sq };
+
+    // diff / now <= bps / 10_000, cross-multiplied so no division is needed.
+    assert!(diff * 10_000 <= now_sq * (bps as u256), ESlippageOutOfBound);
+}
+
+#[test_only]
+public fun assert_within_bps_for_testing(now_sqrt: u128, limit_sqrt: u128, bps: u64) {
+    assert_within_bps(now_sqrt, limit_sqrt, bps)
+}
+
 /// The single admin gate: the presented OwnerCap must belong to this vault.
 fun assert_binding(policy: &Policy, owner_cap: &OwnerCap) {
     assert!(
@@ -376,4 +467,15 @@ public fun is_suspended(policy: &Policy): bool { policy.suspended }
 
 public fun is_pool_allowed(policy: &Policy, pool_id: ID): bool {
     policy.allowed_pools.contains(&pool_id)
+}
+
+/// The slippage bound in basis points, or `none` if it was never set. `some(0)`
+/// means explicitly disabled -- the two are different states, and the difference is
+/// whether anyone decided anything.
+public fun max_slippage_bps(policy: &Policy): Option<u64> {
+    if (dynamic_field::exists(&policy.id, SlippageKey {})) {
+        option::some(*dynamic_field::borrow<SlippageKey, u64>(&policy.id, SlippageKey {}))
+    } else {
+        option::none()
+    }
 }

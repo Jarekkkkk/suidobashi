@@ -358,6 +358,17 @@ async function policyState(hire) {
 }
 
 async function vaultBalanceMist() {
+  // A fixed balance, for the acceptance check ONLY.
+  //
+  // The gate's balance comparison is ADVISORY -- the chain enforces the real
+  // balance, so overriding it here cannot cause a fund loss; it can only make the
+  // server's advice wrong. It exists because otherwise the check's happy-path cases
+  // depend on the vault happening to be funded, and a check that goes red when the
+  // state legitimately changes -- an owner withdrawing before an upgrade, say -- is a
+  // check people learn to ignore.
+  const override = process.env.AGENT_VAULT_BALANCE_MIST;
+  if (override !== undefined) return BigInt(override);
+
   const { SuiGrpcClient } = await import('@mysten/sui/grpc');
   const { VAULT_ID } = await import('./addresses.js');
   const client = new SuiGrpcClient({

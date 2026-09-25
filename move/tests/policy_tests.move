@@ -393,3 +393,140 @@ fun allowlisting_and_revoking_are_idempotent() {
     };
     s.end();
 }
+
+// === slippage bound ===
+//
+// The bound is in basis points of PRICE. The pool quotes price as a square root, so
+// a naive implementation would bound the ROOT and be off by a factor of two at small
+// values. The pair below pins the unit down: a sqrt move of 1/10_000 is a price move
+// of 2.0001 bps, so it must pass at 3 and fail at 2. If the bound were applied to the
+// sqrt price directly, both would pass and nothing else here would notice.
+
+/// 2^64 — sqrt price 1.0 in the pool's Q64.64 representation, a realistic mid.
+const SQRT_ONE: u128 = 18_446_744_073_709_551_616;
+
+#[test]
+fun slippage_within_bound_passes_both_directions() {
+    let up = SQRT_ONE + SQRT_ONE / 10_000;
+    let down = SQRT_ONE - SQRT_ONE / 10_000;
+    policy::assert_within_bps_for_testing(SQRT_ONE, up, 3);
+    policy::assert_within_bps_for_testing(SQRT_ONE, down, 3);
+}
+
+#[test]
+#[expected_failure(abort_code = policy::ESlippageOutOfBound)]
+fun slippage_beyond_bound_aborts() {
+    // a sqrt move of 1/100 is a PRICE move of about 201 bps
+    policy::assert_within_bps_for_testing(SQRT_ONE, SQRT_ONE + SQRT_ONE / 100, 5);
+}
+
+#[test]
+#[expected_failure(abort_code = policy::ESlippageOutOfBound)]
+fun slippage_bound_is_symmetric() {
+    policy::assert_within_bps_for_testing(SQRT_ONE, SQRT_ONE - SQRT_ONE / 100, 5);
+}
+
+/// A 1/10_000 sqrt move is 2.0001 bps of PRICE, so a 2 bps bound must refuse it.
+#[test]
+#[expected_failure(abort_code = policy::ESlippageOutOfBound)]
+fun slippage_is_basis_points_of_price_not_of_its_root() {
+    policy::assert_within_bps_for_testing(SQRT_ONE, SQRT_ONE + SQRT_ONE / 10_000, 2);
+}
+
+/// The largest sqrt price the pool can report, squared, is what forces u256.
+#[test]
+fun slippage_arithmetic_survives_the_extreme_sqrt_price() {
+    let max_sqrt: u128 = 79_226_673_515_401_279_992_447_579_055;
+    policy::assert_within_bps_for_testing(max_sqrt, max_sqrt, 1);
+}
+
+#[test]
+fun slippage_starts_unset() {
+    let mut s = ts::begin(OWNER);
+    let (_vid, pid) = setup(&mut s, 1_000, 500);
+
+    s.next_tx(OWNER);
+    {
+        let p = ts::take_shared<policy::Policy>(&s);
+        assert_eq!(object::id(&p), pid);
+        // unset is NOT the same as zero: nobody has decided anything yet
+        assert!(policy::max_slippage_bps(&p).is_none());
+
+        ts::return_shared(p);
+    };
+    s.end();
+}
+
+/// The owner sets the bound, changes it, and can explicitly disable it.
+#[test]
+fun owner_can_set_and_change_the_slippage_bound() {
+    let mut s = ts::begin(OWNER);
+    let (_vid, _pid) = setup(&mut s, 1_000, 500);
+
+    s.next_tx(OWNER);
+    {
+        let mut p = ts::take_shared<policy::Policy>(&s);
+        let oc = ts::take_from_address<OwnerCap>(&s, OWNER);
+
+        policy::set_max_slippage_bps(&mut p, &oc, 5);
+        assert_eq!(policy::max_slippage_bps(&p).destroy_some(), 5);
+
+        // an upsert, not an append
+        policy::set_max_slippage_bps(&mut p, &oc, 25);
+        assert_eq!(policy::max_slippage_bps(&p).destroy_some(), 25);
+
+        // zero is a decision, and distinguishable from never having set it
+        policy::set_max_slippage_bps(&mut p, &oc, 0);
+        assert_eq!(policy::max_slippage_bps(&p).destroy_some(), 0);
+
+        ts::return_to_address(OWNER, oc);
+        ts::return_shared(p);
+    };
+    s.end();
+}
+
+/// The ceiling exists so a fat-fingered value cannot quietly disable the bound.
+#[test]
+#[expected_failure(abort_code = policy::ESlippageTooLoose)]
+fun slippage_above_the_ceiling_is_refused() {
+    let mut s = ts::begin(OWNER);
+    let (_vid, _pid) = setup(&mut s, 1_000, 500);
+
+    s.next_tx(OWNER);
+    {
+        let mut p = ts::take_shared<policy::Policy>(&s);
+        let oc = ts::take_from_address<OwnerCap>(&s, OWNER);
+
+        policy::set_max_slippage_bps(&mut p, &oc, 501);
+
+        ts::return_to_address(OWNER, oc);
+        ts::return_shared(p);
+    };
+    s.end();
+}
+
+/// The bound is cap-gated like every other admin action.
+#[test]
+#[expected_failure(abort_code = policy::EWrongOwnerCap)]
+fun foreign_cap_cannot_set_the_slippage_bound() {
+    let mut s = ts::begin(OWNER);
+    let (_vid, _pid) = setup(&mut s, 1_000, 500);
+
+    // a cap for a DIFFERENT vault
+    s.next_tx(OWNER);
+    let (other_vault, other_cap) = spend_vault::new(s.ctx());
+    spend_vault::share(other_vault);
+    transfer::public_transfer(other_cap, OWNER);
+
+    s.next_tx(OWNER);
+    {
+        let mut p = ts::take_shared<policy::Policy>(&s);
+        let foreign = ts::take_from_address<OwnerCap>(&s, OWNER);
+
+        policy::set_max_slippage_bps(&mut p, &foreign, 5);
+
+        ts::return_to_address(OWNER, foreign);
+        ts::return_shared(p);
+    };
+    s.end();
+}

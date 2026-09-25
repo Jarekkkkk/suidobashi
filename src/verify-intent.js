@@ -8,14 +8,25 @@
  * Every case is a mainnet simulation inside agent.js; nothing is signed and
  * nothing is submitted, so this costs nothing to run.
  *
- * PRE-CONDITION: both hires must be active and their venues allowlisted. Case 2
- * expects a cautious swap to be *proposed*, which a suspended hire refuses —
- * correctly, but it would look like a failure here. Resume and re-allowlist first
- * if this ever fails only on the cautious cases.
+ * HERMETIC: the vault balance is injected rather than read, so the outcome does not
+ * depend on whether the vault happens to be funded. That matters because the owner
+ * legitimately empties the vault before a package upgrade, and the happy-path cases
+ * would otherwise fail for a reason that has nothing to do with the gate. The gate's
+ * balance check is advisory -- the chain enforces the real balance -- so injecting it
+ * cannot hide a fund-safety problem.
+ *
+ * STILL STATE-DEPENDENT, and unavoidably so: both hires must be active and their
+ * venues allowlisted, because that state is read from the chain. Case 2 expects a
+ * cautious swap to be *proposed*, which a suspended hire refuses -- correctly, but it
+ * would look like a failure here. Resume and re-allowlist first if this ever fails
+ * only on the cautious cases.
  *
  * Usage: node src/verify-intent.js
  */
 import { spawnSync } from 'node:child_process';
+
+/** 0.1 SUI. Above every happy-path amount below, below the deliberate over-budget one. */
+const INJECTED_VAULT_MIST = '100000000';
 
 const CASES = [
   {
@@ -64,6 +75,7 @@ function run(text) {
   const r = spawnSync('node', ['src/agent.js', text], {
     encoding: 'utf-8',
     timeout: 300_000,
+    env: { ...process.env, AGENT_VAULT_BALANCE_MIST: INJECTED_VAULT_MIST },
   });
   const out = r.stdout || '';
   const start = out.indexOf('{');
