@@ -30,8 +30,21 @@ const AMOUNT_MIST = BigInt(process.env.ORDER_AMOUNT_MIST ?? '10000000');   // 0.
  * funds, so it cannot be undercut.
  */
 const MIN_OUT = BigInt(process.env.ORDER_MIN_OUT ?? '5000');               // 0.005 USDC
-/** How long the order stays open. After this, ANYONE may refund it — to you. */
-const TTL_MS = BigInt(process.env.ORDER_TTL_MS ?? String(24 * 60 * 60 * 1000)); // 24h
+/**
+ * How long the order stays open, in milliseconds. After this, ANYONE may refund it —
+ * and the funds always go to the maker.
+ *
+ * ONE MINUTE, and deliberately short. A swap order is a short-lived intent, not a
+ * standing offer: the maker's funds are exposed for the window, and an agent either
+ * fills it inside that or gets nothing. The module imposes no lower bound, so this
+ * can go shorter without any contract change.
+ *
+ * The consequence worth knowing: with a window this tight the REFUND is a routine
+ * path rather than an edge case. An agent that misses the minute leaves the order
+ * unfilled, and the maker reclaims — so the refund has to work, which is why it is
+ * tested rather than assumed.
+ */
+const TTL_MS = BigInt(process.env.ORDER_TTL_MS ?? String(60 * 1000)); // 1 minute
 const POOL = process.env.ORDER_POOL_ID || POOL_ID;
 /** Where the output lands. Defaults to you; the settler cannot change it. */
 const DESTINATION = process.env.ORDER_DESTINATION || DEPLOYER;

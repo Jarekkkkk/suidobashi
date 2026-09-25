@@ -69,15 +69,21 @@ gives the same non-discardable property across transactions.
 So the **storage rebate** can be reclaimed separately. Measured on chain:
 
 ```text
-a minimal transaction          ~0.00024 SUI
-an object's storage rebate     ~0.0018 SUI
+a minimal transaction          ~0.00024 SUI   (the failed ENotAgent tx)
+an object's storage rebate     ~0.0044 SUI    (burn 5gko7Lna…: net +0.0041 after gas)
+a settlement's gas             ~0.0043 SUI
 ```
 
-So a dedicated burn transaction costs about 0.00024 and returns about 0.0018. Burning
-inside `settle` would collect the same rebate at no extra cost — but it would go to
-the **settler**, not the maker. Keeping the object alive is what lets the maker take
-it instead, which is why `burn` is maker-gated: the rebate goes to whoever signs, and
-it is the maker's storage.
+So a dedicated burn costs about 0.0003 and returns about 0.0044 — a net gain of
+**+0.0041**, which nearly covers a settlement's gas. The first version of this note
+estimated ~0.0018 from comparable objects; the measured figure is roughly 2.4× that,
+which is worth knowing because it makes the reclaim materially more valuable than the
+guess suggested.
+
+Burning inside `settle` would collect the same rebate at no extra cost — but it would
+go to the **settler**, not the maker. Keeping the object alive is what lets the maker
+take it instead, which is why `burn` is maker-gated: the rebate goes to whoever signs,
+and it is the maker's storage.
 
 Two consequences that are not optional:
 
@@ -113,6 +119,7 @@ mistake as the venue allowlist, one layer down.
 | who settles | **the policy's agent** | keeps the grant, the agent and the demonstrated caller gate load-bearing. Loosening to permissionless is additive |
 | partial fills | **no** | all or nothing keeps `min_out` unambiguous |
 | refund trigger | **anyone**, after expiry | no order can sit with dead funds if the maker goes quiet |
+| default window | **1 minute** | a swap order is a short-lived intent, not a standing offer. No lower bound in the contract, so it can go shorter |
 | storage rebate | **the maker**, via a separate burn | the rebate goes to whoever signs, and it is the maker's storage |
 | destination | fixed at create | the settler cannot redirect value, same rule as the policy |
 | policy dependency | agent gate + pool allowlist only | the order names its own pool, minimum and expiry |
