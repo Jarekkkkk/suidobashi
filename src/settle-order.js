@@ -28,6 +28,18 @@ import {
 } from './addresses.js';
 
 const EXECUTE = process.argv.includes('--execute');
+/**
+ * Build WITHOUT simulating, so a doomed transaction reaches the chain and fails there.
+ *
+ * Needed for exactly one purpose: proving an on-chain refusal. The normal path calls
+ * `tx.build({ client })`, which resolves AND simulates, so `EBelowMinimum` is caught
+ * before anything is signed — and then the refusal is OUR server's, not the chain's.
+ * That distinction is the whole point of the exercise, so this bypasses it
+ * deliberately.
+ *
+ * Do not use it to submit anything you expect to succeed.
+ */
+const NO_SIMULATE = process.argv.includes('--no-simulate');
 
 const ORDER_ID = process.env.ORDER_ID || process.argv.find((a) => a.startsWith('0x'));
 
@@ -57,6 +69,14 @@ async function main() {
   const agent = process.env.AGENT_ADDRESS || (policyObj.object ?? policyObj).json?.agent;
   if (!agent) throw new Error('could not read the policy agent');
 
+  // The order is a SHARED object, and it has to be referenced explicitly rather than
+  // by `tx.object(id)`. Two reasons: a plain object reference needs RESOLUTION, which
+  // is exactly what an offline build cannot do — and being explicit removes a lookup
+  // from the normal path too.
+  const orderObj = await client.getObject({ objectId: ORDER_ID, include: { json: true } });
+  const sharedVersion = (orderObj.object ?? orderObj).owner?.Shared?.initialSharedVersion;
+  if (!sharedVersion) throw new Error(`${ORDER_ID} is not a shared object — an order should be`);
+
   // Read the pool's live price so the limit is a bound relative to now. With a
   // maker-committed minimum the limit is no longer the protection — that is the
   // minimum, asserted against the actual output — but a sane limit still avoids
@@ -83,7 +103,9 @@ async function main() {
     objectId: CLOCK_ID, initialSharedVersion: CLOCK_SHARED_VERSION, mutable: false,
   });
 
-  const order = tx.object(ORDER_ID);
+  const order = tx.sharedObjectRef({
+    objectId: ORDER_ID, initialSharedVersion: Number(sharedVersion), mutable: true,
+  });
 
   // Pool<A, B> is Pool<USDC, SUI>, so a SUI order is side B and settles b2a.
   if (SIDE === 'b') {
@@ -100,11 +122,32 @@ async function main() {
     });
   }
 
-  const bytes = await tx.build({ client });
+  // Either a normal build (resolved and simulated) or an offline one. The offline
+  // path needs fully-specified gas data because there is no client to resolve it:
+  // a budget, a price, an empty payment list, and a ValidDuring expiry — an `Epoch`
+  // expiry is rejected for a transaction with no address-owned inputs.
+  let bytes;
+  if (NO_SIMULATE) {
+    const chainId = (await client.getChainIdentifier()).chainIdentifier;
+    const sysState = await client.getCurrentSystemState();
+    const epochNow = Number(sysState.systemState?.epoch ?? sysState.epoch);
+    tx.setGasBudget(50_000_000n);
+    tx.setGasPrice(1000n);
+    tx.setGasPayment([]);
+    tx.setExpiration({
+      ValidDuring: {
+        minEpoch: epochNow, maxEpoch: epochNow + 1,
+        minTimestamp: null, maxTimestamp: null,
+        chain: chainId, nonce: Math.floor(Date.now() % 4294967295),
+      },
+    });
+    bytes = await tx.build({ assumeSufficientAddressBalances: true });
+  } else {
+    bytes = await tx.build({ client });
+  }
 
   if (!EXECUTE) {
-    const res = await client.simulateTransaction({ transaction: bytes });
-    const status = res?.Transaction?.status ?? res?.status ?? null;
+    const res = await client.simulateTransaction({ transaction: bytes });    const status = res?.Transaction?.status ?? res?.status ?? null;
     const ok = status?.success === true || status?.status === 'success';
     console.log(JSON.stringify({
       mode: 'dry-run',
@@ -112,6 +155,7 @@ async function main() {
       agent,
       order: ORDER_ID,
       sqrtPriceLimit: sqrtPriceLimit.toString(),
+      simulated: !NO_SIMULATE,
       // Reported, never printed: a dry run should tell you whether --execute would
       // work without making you go and look at the file.
       agentKeyConfigured: Boolean(process.env.AGENT_SECRET_KEY),
@@ -135,13 +179,18 @@ async function main() {
   const signer = Ed25519Keypair.fromSecretKey(secretKey);
 
   const sent = await client.signAndExecuteTransaction({ transaction: bytes, signer });
-  const digest = sent?.Transaction?.digest ?? sent?.digest ?? null;
-  const status = sent?.Transaction?.status ?? sent?.status ?? null;
+  // A FAILED transaction comes back wrapped in `FailedTransaction`, not `Transaction`.
+  // Reading only the success shape reported `digest: null` for precisely the failures
+  // this mode exists to produce — the digest was there, under a different key.
+  const result = sent?.Transaction ?? sent?.FailedTransaction ?? sent ?? {};
+  const digest = result.digest ?? null;
+  const status = result.status ?? null;
   console.log(JSON.stringify({
     mode: 'executed',
     step: `fill order (settle_${SIDE}2${SIDE === 'b' ? 'a' : 'b'})`,
     agent,
     order: ORDER_ID,
+    simulated: !NO_SIMULATE,
     digest,
     status,
   }, null, 2));
