@@ -12,3 +12,8 @@ move/build/
 # of the file that holds every deployed id.
 *.tmp
 
+# `sui client test-upgrade` writes an ephemeral publication record per environment.
+# The file says so itself: "this file should not be committed to source control".
+# move/Published.toml is the real record of what is deployed.
+Pub.*.toml
+
