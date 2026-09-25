@@ -1,0 +1,21 @@
+{
+  "name": "sui-tokyo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "agent": "node src/agent.js",
+    "budget": "node src/set-budget.js",
+    "hires": "node src/hire-agent.js",
+    "qvac": "qvac serve openai",
+    "test": "cd move && sui move test",
+    "ui": "node src/ui.js",
+    "verify": "node src/verify-intent.js && node src/verify-page.js && node src/verify-guard.js"
+  },
+  "dependencies": {
+    "@cetusprotocol/aggregator-sdk": "^1.7.3",
+    "@mysten/dapp-kit-core": "^1.6.30",
+    "@mysten/sui": "^2.31.3",
+    "dotenv": "^16.4.5"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "loggerConsoleOutput": true,
+  "loggerLevel": "info",
+  "serve": {
+    "models": {
+      "intent": {
+        "model": "QWEN3_600M_INST_Q4",
+        "default": true,
+        "config": { "ctx_size": 8192 }
+      }
+    }
+  }
+}
