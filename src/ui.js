@@ -345,9 +345,15 @@ function actionFor(kind, body) {
     if (amount === null || amount <= 0n) return { error: 'amountMist must be a positive integer' };
     const minOut = toMist(body.minOutUsdc);
     if (minOut === null || minOut <= 0n) return { error: 'minOutUsdc must be a positive integer' };
-    // Ceilings, not policy: a tampered page should not be able to escrow an arbitrary
-    // amount in one click.
-    if (amount > 1_000_000_000n) return { error: 'escrow above 1 SUI is not allowed here' };
+    // A TYPO GUARD, not a security boundary. What protects the maker is their
+    // SIGNATURE: every order needs wallet approval, so a tampered page cannot escrow
+    // anything without it. This exists only to catch a fat-fingered amount.
+    //
+    // Set well above any plausible test for that reason. The first version capped at
+    // 1 SUI and blocked a legitimate 10 SUI order — a typo guard that refuses real
+    // intent has quietly become a limit, which is the wrong thing to have built by
+    // accident.
+    if (amount > 10_000_000_000n) return { error: 'escrow above 10 SUI is not allowed here' };
 
     return {
       script: 'node src/create-order.js',
@@ -364,6 +370,20 @@ function actionFor(kind, body) {
         escrowSui: (Number(amount) / 1e9).toString(),
         minOutUsdc: (Number(minOut) / 1e6).toString(),
       },
+    };
+  }
+  if (kind === 'burn') {
+    // Step 3: reclaim the storage of a settled order. Maker-gated on chain, so a
+    // stranger cannot take the rebate — but the id is checked here too, because a
+    // malformed one produces an unreadable failure from the resolver.
+    const orderId = String(body.orderId || '').trim().toLowerCase();
+    if (!/^0x[0-9a-f]{64}$/.test(orderId)) {
+      return { error: 'orderId must be a full 0x object id (64 hex characters)' };
+    }
+    return {
+      script: 'node src/burn-order.js',
+      env: { ORDER_ID: orderId },
+      proposal: { action: 'reclaim a settled order\u2019s storage', orderId },
     };
   }
   return { error: `unknown action "${kind}"` };
@@ -659,6 +679,8 @@ const PAGE = `<!doctype html>
   <span class="grp">escrow <input id="ordAmt" type="text" value="0.01"> SUI
     floor <input id="ordMin" type="text" value="0.005"> USDC
     <button class="ghost" id="ordMake">Create order</button></span>
+  <span class="grp">burn settled <input id="ordId" type="text" placeholder="0x…" size="10">
+    <button class="ghost" id="ordBurn">Burn</button></span>
   <div class="legend">step 1 of the escrow flow, and the only step where money moves — the coin
     leaves your wallet here and sits inside the order until an agent fills it, or it expires and
     anyone may refund it to you. Your floor is enforced by the same function that moves the funds,

@@ -298,6 +298,14 @@ $('ordMake').onclick = () => {
   return ownerAction('order', { amountMist, minOutUsdc });
 };
 
+// Step 3: reclaim a settled order's storage. The rebate goes to whoever signs, which
+// is why this is maker-gated on chain — and why the button is here rather than open.
+$('ordBurn').onclick = () => {
+  const orderId = $('ordId').value.trim();
+  if (!orderId) return say('paste the settled order id first', 'bad');
+  return ownerAction('burn', { orderId });
+};
+
 // The route back to custody, and the step that must run before a package upgrade.
 // No amount field: the operation that matters is emptying the vault.
 $('withdraw').onclick = () => ownerAction('withdraw', {});
