@@ -284,9 +284,14 @@ is terminal for that guard, so anything after it needs a fresh `open`.
 
 The CLI scripts under `src/` are **dry-run or `--emit-bytes` only** — there is no
 `--execute` path and no key material anywhere (`setup-vault.js` is the sole
-exception, and it is a one-off provisioning script). The `--execute (needs
-SUI_SECRET_KEY)` line in `create-position.js` is stale documentation. Everything
-that signs now signs in the extension, through the server's build/submit split.
+exception: it is the one-off script that creates the first vault, and the only file
+that reads `SUI_SECRET_KEY`). Everything that signs signs in the extension, through
+the server's build/submit split.
+
+`src/agent.js` is the one place `--execute` still appears, and it is there to REFUSE
+it: passing the flag prints a message explaining that signing no longer happens
+there. Keep it — an old command in someone's shell history should fail loudly rather
+than quietly do something else.
 
 ## Mainnet feature flags (protocol 136, read from the node)
 
@@ -388,8 +393,9 @@ can reach Cetus directly and bypass the wrapper entirely. Here the single borrow
 is private, and `rebalance` performs remove, collect, close, open and repay
 internally so the freed value never becomes a transaction value.
 
-Signing never exposes the private key: the SDK builds bytes, `sui keytool sign`
-signs exactly those, `sui client execute-signed-tx` executes them.
+Signing never exposes the private key: the SDK builds bytes, the wallet extension
+signs exactly those, and `sui client execute-signed-tx` submits them. That last
+command cannot sign anything, which is the property the whole split rests on.
 
 ## Backlog
 

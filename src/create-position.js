@@ -13,7 +13,11 @@
  *
  * Usage:
  *   node src/create-position.js                 dry-run
- *   node src/create-position.js --execute       (needs SUI_SECRET_KEY)
+ *   node src/create-position.js --emit-bytes    print the bytes to be signed
+ *
+ * There is no `--execute` path and this script holds no key: it builds a
+ * transaction and either simulates it or prints it. Signing is done by the wallet
+ * extension, and the server submits bytes plus the signature it was handed.
  */
 import 'dotenv/config';
 import {
