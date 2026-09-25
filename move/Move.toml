@@ -1,0 +1,20 @@
+[package]
+name = "sui_tokyo"
+edition = "2024"
+
+[dependencies]
+cetus_clmm = { r.mvr = "@cetuspackages/clmm" }
+
+# `spend_vault` is inlined into sources/ rather than taken as a dependency.
+#
+# OpenZeppelin ships that allowance package open-source but does not register it,
+# and the first publish bundled its module into this package. An upgrade cannot
+# remove a module that is already part of a published package, so the module has
+# to be genuinely ours. Inlining it also removes the "unpublished dependency"
+# problem from every future upgrade.
+#
+# Source: https://github.com/OpenZeppelin/contracts-sui
+#         contracts/allowance/sources/spend_vault.move
+#         rev 57399c7c9bd51c0cf11d5ea8c5e31091198293c4
+# Only the module declaration line was changed. The file is otherwise verbatim,
+# including its bearer-cap warning, which is the rule the policy module honours.
