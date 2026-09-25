@@ -106,3 +106,9 @@ first move in the [roadmap](docs/ROADMAP.md).
   decide anything, and the design does not ask it to.
 - **Not finished.** The MCP server standard is designed and unbuilt. See the
   roadmap for what is real versus planned.
+
+## License
+
+[Apache-2.0](LICENSE). Chosen over MIT for the explicit patent grant, because the
+point of this repository is that others implement the standard and build strategies
+and MCP servers against it.

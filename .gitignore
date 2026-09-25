@@ -1,0 +1,14 @@
+node_modules/
+.env
+.sui-tokyo/
+*.log
+move/build/
+
+# macOS
+.DS_Store
+
+# adoptGuardFrom writes addresses.js.tmp before renaming it into place, so a
+# failure between the two can leave one behind. Never commit a half-written copy
+# of the file that holds every deployed id.
+*.tmp
+
