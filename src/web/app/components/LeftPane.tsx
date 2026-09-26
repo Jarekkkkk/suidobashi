@@ -9,8 +9,6 @@ import { SourceAvatar } from '@/components/Avatar';
 import { PolicySheet } from '@/components/PolicySheet';
 import { ChatsPane } from '@/components/ChatsPane';
 import { TalentsPane } from '@/components/TalentsPane';
-import { StrategiesPane } from '@/components/StrategiesPane';
-import { GuardPane } from '@/components/GuardPane';
 
 /*
  * The left pane: what is installed, and what is left over.
@@ -340,12 +338,10 @@ export function LeftPane({
           <div className="flex h-full flex-col">
             {/* What the model can DO. */}
             <TalentsPane />
-            {/* These were tabs of their own until they were recognised for what they are: one
-                capability each, not a place in the app. A talent is a thing the model calls and a
-                person watches, and these two are exactly that — so they belong in the pane that
-                lists capabilities rather than beside it in the strip. */}
-            <StrategiesPane />
-            <GuardPane />
+            {/* HIDDEN for now, not deleted. The deepbook guard and the strategy listing are still
+                `GuardPane.tsx` and `StrategiesPane.tsx` in this directory, and bringing either back
+                is one import and one line here. They were showing live chain JSON — useful while it
+                was being built, and noise in a pane whose job is to list what the model can call. */}
           </div>
         )}
 
