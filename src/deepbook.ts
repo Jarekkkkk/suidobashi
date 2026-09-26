@@ -15,6 +15,9 @@
  * measured off the live pool and `quantityScale` for what could not be.
  */
 import { Transaction } from '@mysten/sui/transactions';
+import type { TransactionObjectArgument } from '@mysten/sui/transactions';
+import type { SuiGrpcClient } from '@mysten/sui/grpc';
+import { DEEPBOOK_GUARD_PACKAGE, SUI_TYPE, USDC_TYPE } from './addresses.js';
 
 /** DeepBook v3, version 8 — the version live on mainnet. */
 export const DEEPBOOK_PACKAGE =
@@ -29,6 +32,16 @@ export const DEEPBOOK_PACKAGE =
  */
 export const DEEPBOOK_POOL_ID =
   '0xe05dafb5133bcffb8d59f4e12465dc0e9faeaa05e3e342a08fe135800e3e4407';
+
+/**
+ * The guard's type arguments for this pool: `[Base, Quote]`.
+ *
+ * NOT `POOL_TYPE_ARGS` from `addresses.ts`. That one is `[USDC, SUI]` for this project's Cetus
+ * pool, which is the OPPOSITE order — and `Pool<USDC, SUI>` is a different type from
+ * `Pool<SUI, USDC>`, so a reused constant would not compile against the right pool, it would name
+ * the wrong one. Spelled out rather than derived, so the difference is visible where it matters.
+ */
+export const DEEPBOOK_POOL_TYPE_ARGS = [SUI_TYPE, USDC_TYPE] as const;
 
 /** The clock, for every call that needs a timestamp. */
 export const CLOCK_ID = '0x6';
@@ -187,32 +200,235 @@ function ceilTo(value: bigint, step: bigint): bigint {
 }
 
 /**
- * Create a BalanceManager and one of each capability, all owned by `owner`.
+ * Add a BalanceManager and the one capability a guard needs to `tx`, and return both.
  *
- * Touches only DeepBook's published package, so this runs today — no publish needed. The maker
- * keeps the BalanceManager owned here; `deepbook_guard::create` takes it by value and shares it,
- * which is the moment it becomes referenceable by the agent's transaction.
+ * NOTHING IS TRANSFERRED, and that is the point: the caller composes this with `createGuardTx` in
+ * the SAME transaction. Sui refuses to share an object that an earlier transaction created, and
+ * `create` shares the BalanceManager — so an account and its guard are born together or not at all.
+ * There is no "create the account now, guard it later": simulated on mainnet, that second
+ * transaction aborts inside `transfer::share_object_impl`, and it does so even when the share is
+ * Sui's own `public_share_object` with none of this code in the path.
+ *
+ * The sender becomes the owner and stays the owner — DeepBook has no function that changes one.
+ * Only a trade capability is minted: a deposit or withdraw capability would be dead, because
+ * DeepBook's owner paths for those take no capability at all.
  *
  * `new` is used rather than `new_with_custom_owner_caps_v2`: the latter also needs the DeepBook
  * registry object and an `App` witness type, for capabilities this does not want.
  */
-export function buildCreateAccount(owner: string): {
-  tx: Transaction;
-  balanceManager: () => ReturnType<Transaction['moveCall']>;
-  tradeCap: () => ReturnType<Transaction['moveCall']>;
+export function createAccountTx(tx: Transaction): {
+  balanceManager: TransactionObjectArgument;
+  tradeCap: TransactionObjectArgument;
 } {
-  const tx = new Transaction();
   const target = (fn: string) => `${DEEPBOOK_PACKAGE}::balance_manager::${fn}`;
-
   const balanceManager = tx.moveCall({ target: target('new'), arguments: [] });
   const tradeCap = tx.moveCall({ target: target('mint_trade_cap'), arguments: [balanceManager] });
+  return { balanceManager, tradeCap };
+}
 
-  tx.transferObjects([balanceManager], owner);
-  tx.transferObjects([tradeCap], owner);
+/**
+ * An owned object argument: an id for the client to resolve, or a reference to something created
+ * earlier in this same transaction.
+ *
+ * Both are needed because a guard cannot be built from a previous transaction's account, so the
+ * account arrives as a create result rather than as an id.
+ */
+type ObjectArg = TransactionObjectArgument | string;
 
+function ownedArg(tx: Transaction, v: ObjectArg): TransactionObjectArgument {
+  return typeof v === 'string' ? tx.object(v) : v;
+}
+
+// === Shared objects, named explicitly ===
+
+/**
+ * A shared object, referenced the way this repo references them.
+ *
+ * `tx.object(id)` would do, but it RESOLVES the object through the client at build time. Naming the
+ * initial shared version instead removes that lookup, and more to the point makes the version the
+ * transaction is built against something this file can see and a caller can check.
+ */
+export type SharedRef = { objectId: string; initialSharedVersion: number; mutable: boolean };
+
+/**
+ * Read a shared object's initial version.
+ *
+ * The access shape is `settle-order.ts`'s, which is proven on this same client: the owner is a
+ * tagged union and a shared one carries `Shared.initialSharedVersion`. A missing value throws rather
+ * than defaulting, because a guard built against the wrong shared version fails at execution with
+ * an error that points at the object rather than at this function.
+ */
+export async function sharedVersionOf(client: SuiGrpcClient, objectId: string): Promise<number> {
+  const res = await client.getObject({ objectId });
+  const obj = res.object ?? res;
+  const initial = obj?.owner?.Shared?.initialSharedVersion;
+  if (initial === undefined || initial === null) {
+    throw new Error(`${objectId} is not shared — its owner is ${JSON.stringify(obj?.owner)}`);
+  }
+  return Number(initial);
+}
+
+/** The four shared objects every order path needs, resolved once per transaction. */
+export type OrderRefs = {
+  guard: SharedRef;
+  pool: SharedRef;
+  balanceManager: SharedRef;
+  clock: SharedRef;
+};
+
+function orderRefs(tx: Transaction, refs: OrderRefs) {
   return {
-    tx,
-    balanceManager: () => balanceManager,
-    tradeCap: () => tradeCap,
+    guard: tx.sharedObjectRef(refs.guard),
+    pool: tx.sharedObjectRef(refs.pool),
+    balanceManager: tx.sharedObjectRef(refs.balanceManager),
+    clock: tx.sharedObjectRef(refs.clock),
   };
+}
+
+// === The caller's half of the guard ===
+//
+// These build the calls; they do not resolve, sign or submit. Everything a caller would otherwise
+// have to get right by hand — the argument order, the type arguments, which capability authorises
+// the order — is fixed here once, and the move-side signature is the only thing that can change it.
+
+/**
+ * Create a guard over an account. `create` takes the BalanceManager BY VALUE, sharing it as a side
+ * effect, so this is the transaction after which an agent can reference it.
+ *
+ * `poolId` is a plain id rather than a pool reference, deliberately: the guard stores the binding
+ * and every order asserts it, so a caller cannot pass a pool object whose type arguments disagree
+ * with the guard's own.
+ */
+export function createGuardTx(
+  tx: Transaction,
+  opts: {
+    poolId: string;
+    balanceManager: ObjectArg;
+    tradeCap: ObjectArg;
+    agent: string;
+    priceMin: bigint;
+    priceMax: bigint;
+    maxQty: bigint;
+    budget: bigint;
+  },
+) {
+  if (!DEEPBOOK_GUARD_PACKAGE) throw new Error('the guard module is not published');
+  return tx.moveCall({
+    target: `${DEEPBOOK_GUARD_PACKAGE}::deepbook_guard::create`,
+    typeArguments: [...DEEPBOOK_POOL_TYPE_ARGS],
+    arguments: [
+      tx.pure.id(opts.poolId),
+      ownedArg(tx, opts.balanceManager),
+      ownedArg(tx, opts.tradeCap),
+      tx.pure.address(opts.agent),
+      tx.pure.u64(opts.priceMin),
+      tx.pure.u64(opts.priceMax),
+      tx.pure.u64(opts.maxQty),
+      tx.pure.u64(opts.budget),
+    ],
+  });
+}
+
+/**
+ * The default expiry: an hour out, in milliseconds.
+ *
+ * NOT zero. The contract table says expiry `0` means "no expiration", and version 8 disagrees:
+ * `order_info::validate_inputs` asserts `timestamp <= expire_timestamp`, so a zero is refused with
+ * `EInvalidExpireTimestamp` (code 3) — discovered by a live probe, after ten quantities were
+ * checked and this, not the quantity, turned out to be what every one of them was failing on.
+ * "No expiry" is a timestamp far in the future, not an absent one.
+ */
+function defaultExpireMs(): bigint {
+  return BigInt(Date.now() + 3_600_000);
+}
+
+/** Place a bid. Agent-gated on chain; the agent supplies parameters and nothing else. */
+export function buyTx(
+  tx: Transaction,
+  refs: OrderRefs,
+  opts: { clientOrderId: bigint; orderType: number; price: bigint; quantity: bigint; expireMs?: bigint },
+) {
+  if (!DEEPBOOK_GUARD_PACKAGE) throw new Error('the guard module is not published');
+  const r = orderRefs(tx, refs);
+  return tx.moveCall({
+    target: `${DEEPBOOK_GUARD_PACKAGE}::deepbook_guard::buy`,
+    typeArguments: [...DEEPBOOK_POOL_TYPE_ARGS],
+    arguments: [
+      r.guard, r.pool, r.balanceManager,
+      tx.pure.u64(opts.clientOrderId),
+      tx.pure.u8(opts.orderType),
+      tx.pure.u64(opts.price),
+      tx.pure.u64(opts.quantity),
+      tx.pure.u64(opts.expireMs ?? defaultExpireMs()),
+      r.clock,
+    ],
+  });
+}
+
+/** Place an ask. Identical to `buy` but for `is_bid`, which is the whole difference on chain. */
+export function sellTx(
+  tx: Transaction,
+  refs: OrderRefs,
+  opts: { clientOrderId: bigint; orderType: number; price: bigint; quantity: bigint; expireMs?: bigint },
+) {
+  if (!DEEPBOOK_GUARD_PACKAGE) throw new Error('the guard module is not published');
+  const r = orderRefs(tx, refs);
+  return tx.moveCall({
+    target: `${DEEPBOOK_GUARD_PACKAGE}::deepbook_guard::sell`,
+    typeArguments: [...DEEPBOOK_POOL_TYPE_ARGS],
+    arguments: [
+      r.guard, r.pool, r.balanceManager,
+      tx.pure.u64(opts.clientOrderId),
+      tx.pure.u8(opts.orderType),
+      tx.pure.u64(opts.price),
+      tx.pure.u64(opts.quantity),
+      tx.pure.u64(opts.expireMs ?? defaultExpireMs()),
+      r.clock,
+    ],
+  });
+}
+
+/** Cancel one resting order, returning its locked funds to settled balances. */
+export function cancelTx(tx: Transaction, refs: OrderRefs, orderId: bigint) {
+  if (!DEEPBOOK_GUARD_PACKAGE) throw new Error('the guard module is not published');
+  const r = orderRefs(tx, refs);
+  return tx.moveCall({
+    target: `${DEEPBOOK_GUARD_PACKAGE}::deepbook_guard::cancel`,
+    typeArguments: [...DEEPBOOK_POOL_TYPE_ARGS],
+    arguments: [r.guard, r.pool, r.balanceManager, tx.pure.u128(orderId), r.clock],
+  });
+}
+
+/**
+ * Fund the account, by DeepBook's OWN owner path rather than ours.
+ *
+ * `balance_manager::deposit` is owner-gated and needs no capability, and the maker is always the
+ * account's owner — which is why the guard has no deposit function. The coin comes from splitting
+ * gas, so a caller needs no coin object to hand.
+ */
+export function depositSuiTx(tx: Transaction, balanceManager: SharedRef, amountMist: bigint) {
+  const coin = tx.splitCoins(tx.gas, [tx.pure.u64(amountMist)]);
+  return tx.moveCall({
+    target: `${DEEPBOOK_PACKAGE}::balance_manager::deposit`,
+    typeArguments: [SUI_TYPE],
+    arguments: [tx.sharedObjectRef(balanceManager), coin],
+  });
+}
+
+/**
+ * Empty the account back to an address, by DeepBook's owner path again — the exit that needs no
+ * capability, no guard and no cooperation from this module or the agent.
+ */
+export function withdrawAllSuiTx(
+  tx: Transaction,
+  balanceManager: SharedRef,
+  recipient: string,
+) {
+  const coin = tx.moveCall({
+    target: `${DEEPBOOK_PACKAGE}::balance_manager::withdraw_all`,
+    typeArguments: [SUI_TYPE],
+    arguments: [tx.sharedObjectRef(balanceManager)],
+  });
+  tx.transferObjects([coin], tx.pure.address(recipient));
+  return coin;
 }

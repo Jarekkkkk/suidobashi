@@ -29,7 +29,8 @@ import {
   DEEPBOOK_PACKAGE,
   DEEPBOOK_POOL_ID,
   DEEPBOOK_TICK_SIZE,
-  buildCreateAccount,
+  createAccountTx,
+  createGuardTx,
   gridLevels,
   priceScale,
   quantityScale,
@@ -216,12 +217,27 @@ if (sim.$kind === 'Transaction') {
   }
 }
 
-// The creation path: touches only DeepBook's published package, so it must simulate today. Success
-// here is what makes "create a guard" a one-transaction job once the guard module exists.
-const account = buildCreateAccount('0x0000000000000000000000000000000000000000000000000000000000000001');
-const accountSim = await client.simulateTransaction({ transaction: account.tx });
+// The creation path, and its SHAPE is the point. Sui refuses to share an object that an earlier
+// transaction created, and `create` shares the BalanceManager — so an account and its guard must be
+// built in ONE transaction. Simulated both ways against this chain: split across two transactions
+// it aborts in `transfer::share_object_impl`; composed like this, it succeeds. That is why this
+// check builds both rather than just the account.
+const accountTx = new Transaction();
+accountTx.setSender('0x0000000000000000000000000000000000000000000000000000000000000001');
+const { balanceManager, tradeCap } = createAccountTx(accountTx);
+createGuardTx(accountTx, {
+  poolId: DEEPBOOK_POOL_ID,
+  balanceManager,
+  tradeCap,
+  agent: '0x0000000000000000000000000000000000000000000000000000000000000001',
+  priceMin: 500_000n,
+  priceMax: 2_000_000n,
+  maxQty: 1_000_000_000n,
+  budget: 1_000_000_000n,
+});
+const accountSim = await client.simulateTransaction({ transaction: accountTx });
 check(
-  'creating a BalanceManager and its trade capability simulates on mainnet',
+  'creating an account AND its guard in one transaction simulates on mainnet',
   accountSim.$kind === 'Transaction',
   accountSim.$kind === 'Transaction' ? undefined : why(accountSim),
 );

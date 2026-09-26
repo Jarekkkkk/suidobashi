@@ -25,6 +25,15 @@ the budget is authority, and they are not the same number.
 
 ### Proven on mainnet, by real transactions
 
+- The guard wraps a real DeepBook account: account AND guard in one transaction,
+  `BFiuucS2ZV2VSN3W7PGZgQqepG2BfzJyLRCc1ansWrBm` — BalanceManager `0x2496c9d2…` shared by that call,
+  guard `0x4d093945…`. Funded by `6tNiEhsG7YHa9ezr9osfBT1yDre2UjCyGgMhsqfvL9qY`, DeepBook's own
+  owner path, with no capability involved — which is how funding is supposed to work and now has a
+  digest behind it.
+- **The guard refused its own agent on chain.** A probe simulated sell quantities of 1e11 and 1e12
+  (both past DeepBook's minimum-size gate) and 1e13 upward, which aborted `EQuantityAboveBound` at
+  `0xe420d1be…::deepbook_guard`. The band, the per-order bound and the agent gate are not a
+  description of the module; they are the module running.
 - `deepbook_guard` is live, in the v9 upgrade: `EtxVz7BBjKC4qVJqnbTp9LqCm16heCB1UfExsm41VZHM`
   — package `0xe420d1be…`, version 9, 0.1996 SUI. The published module list is
   `deepbook_guard, order, policy, position_guard, spend_vault`, and that list is itself the
@@ -652,6 +661,24 @@ ever read, in a struct a Sui upgrade cannot slim: `Published.toml`'s own comment
 ("an upgrade cannot remove a module that is already part of a published package") is the same
 lesson one level down, at field granularity. The cost of finding it late is a guard that carries
 two dead fields forever.
+
+**Sui refuses to share an object that an EARLIER transaction created.** Sharing a DeepBook
+`BalanceManager` aborts inside `transfer::share_object_impl` (code 0) whenever it was created by a
+previous transaction — and it does so even through Sui's own `0x2::transfer::public_share_object`,
+with none of our code in the path. Build the same account and a guard around it in ONE transaction
+and it succeeds. Simulated both ways against mainnet, four ways, before believing it.
+
+This is why the Move unit tests passed while the live sequence could not: each test creates a
+BalanceManager and shares it in the same transaction, so the rule never came up. And it is a design
+constraint, not just a sequencing bug: **an account and its guard are born together or not at all.**
+There is no "create the account today, guard it tomorrow", which is what the ship script originally
+tried, and what any UI flow must not try either.
+
+**DeepBook v8 rejects `expire_timestamp = 0`.** The contract table says `0` means "no expiration".
+`order_info::validate_inputs` says `assert!(timestamp <= expire_timestamp)` and refuses a zero with
+`EInvalidExpireTimestamp` (code 3). Found by a probe: ten quantities were checked, every one of them
+failed, and the quantity was not the reason — the expiry was. "No expiry" is a timestamp far in the
+future, not an absent one.
 
 ## Mainnet feature flags (protocol 136, read from the node)
 
