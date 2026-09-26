@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
-import { api, type Event } from '@/lib/api';
+import { api } from '@/lib/api';
 import { signAndSubmit, type Say, type OnTerms } from '@/lib/flow';
+import type { Event } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 
@@ -8,8 +9,8 @@ import { Button } from '@/components/ui/button';
  * The left pane: what is installed, and what is left over.
  *
  * The second tab exists because this system is NOTIFIED, NOT WATCHING — the maker tells the
- * server an order exists, and nothing polls. So something has to hold the things that were
- * left behind, and the honest answer is the user, with a place that shows them.
+ * server an order exists, and nothing polls. So something has to hold the things that were left
+ * behind, and the honest answer is the user, with a place that shows them.
  *
  * IT MUST NOT BE A DEAD END. A list of things you cannot act on is worse than no list: it
  * reports a problem and withholds the remedy. Every row carries its action, and the action is
@@ -45,6 +46,40 @@ type Hire = {
 function countdown(expiresAtMs: string): number | null {
   const left = Number(expiresAtMs) - Date.now();
   return left > 0 ? Math.ceil(left / 1000) : null;
+}
+
+function Tab({ active, onClick, children }: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        'relative rounded-md px-2.5 py-1 text-[12px] font-medium transition-colors',
+        active
+          ? 'bg-accent text-accent-foreground'
+          : 'text-muted-foreground hover:text-foreground',
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+/** A small status pill. Colour carries the meaning, so it is a token and not a literal. */
+function Pill({ tone, children }: { tone: 'muted' | 'chain' | 'advisory'; children: React.ReactNode }) {
+  const tones = {
+    muted: 'bg-muted text-muted-foreground',
+    chain: 'bg-success/15 text-chain',
+    advisory: 'bg-warning/15 text-advisory',
+  } as const;
+  return (
+    <span className={cn('rounded-sm px-1.5 py-0.5 text-[10px] font-medium', tones[tone])}>
+      {children}
+    </span>
+  );
 }
 
 export function LeftPane({ events, say, onTerms }: { events: Event[]; say: Say; onTerms: OnTerms }) {
@@ -133,95 +168,90 @@ export function LeftPane({ events, say, onTerms }: { events: Event[]; say: Say; 
     }
   }
 
+  const outstanding = out?.orders ?? [];
+
   return (
     <div className="flex h-full flex-col">
       {/* A plain tab strip rather than the shadcn Tabs component: two tabs, no keyboard
           roving, and vendoring Radix for this would be more code than it replaces. */}
-      <div className="flex gap-1 border-b border-white/10 px-3 py-2">
-        {(['agents', 'outstanding'] as const).map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={cn(
-              'rounded px-2 py-1 text-xs transition-colors',
-              tab === t ? 'bg-white/10 text-white/90' : 'text-white/40 hover:text-white/70',
-            )}
-          >
-            {t}
-            {t === 'outstanding' && (out?.orders.length ?? 0) > 0 && (
-              <span className="ml-1.5 rounded-full bg-amber-400/20 px-1.5 text-[10px] text-amber-300">
-                {out?.orders.length}
-              </span>
-            )}
-          </button>
-        ))}
+      <div className="flex shrink-0 items-center gap-1 border-b border-border px-3 py-2">
+        <Tab active={tab === 'agents'} onClick={() => setTab('agents')}>agents</Tab>
+        <Tab active={tab === 'outstanding'} onClick={() => setTab('outstanding')}>
+          outstanding
+          {outstanding.length > 0 && (
+            <span className="ml-1.5 rounded-full bg-warning/20 px-1.5 text-[10px] text-advisory">
+              {outstanding.length}
+            </span>
+          )}
+        </Tab>
       </div>
 
-      {note && <p className="px-3 py-2 text-xs text-amber-300/80">{note}</p>}
+      {note && (
+        <p className="shrink-0 border-b border-border bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
+          {note}
+        </p>
+      )}
 
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
         {tab === 'agents' && (
-          <ul className="space-y-2">
+          <ul className="flex flex-col gap-2">
             {(hires ?? []).map((h) => (
-              <li key={h.name} className="rounded border border-white/10 p-2">
+              <li
+                key={h.name}
+                className="rounded-lg border border-border bg-card p-2.5 transition-colors hover:border-border/80"
+              >
                 <div className="flex items-center gap-2">
-                  <span className="text-sm text-white/85">{h.name}</span>
-                  {h.suspended && (
-                    <span className="rounded bg-red-500/15 px-1.5 text-[10px] text-red-300">
-                      suspended
-                    </span>
-                  )}
+                  <span className="text-[13px] font-medium">{h.name}</span>
+                  {h.suspended && <Pill tone="advisory">suspended</Pill>}
                 </div>
-                <div className="mt-1 font-mono text-[10px] text-white/35">
+                <div className="mt-1.5 font-mono text-[10px] text-muted-foreground">
                   {h.agent ? `${h.agent.slice(0, 10)}…${h.agent.slice(-4)}` : 'no agent'}
                 </div>
-                <div className="mt-1 text-[11px] text-white/40">
-                  budget {h.budgetSui ?? '—'} SUI · {h.venues ?? 0} venue(s)
+                <div className="mt-1.5 flex items-center gap-2 text-[11px] text-muted-foreground">
+                  <span>budget {h.budgetSui ?? '—'} SUI</span>
+                  <span className="h-1 w-1 rounded-full bg-border" />
+                  <span>{h.venues ?? 0} venue{h.venues === 1 ? '' : 's'}</span>
                 </div>
               </li>
             ))}
             {hires !== null && hires.length === 0 && (
-              <li className="text-xs text-white/40">No hires configured.</li>
+              <li className="px-1 text-[12px] text-muted-foreground">No hires configured.</li>
             )}
-            {hires === null && !note && <li className="text-xs text-white/40">reading…</li>}
+            {hires === null && !note && (
+              <li className="px-1 text-[12px] text-muted-foreground">reading…</li>
+            )}
           </ul>
         )}
 
         {tab === 'outstanding' && (
           <>
-            {out && out.orders.length === 0 && (
-              <p className="text-xs text-white/40">
-                Nothing needs attention.
-                <span className="mt-1 block text-[10px] text-white/25">
+            {out && outstanding.length === 0 && (
+              <div className="rounded-lg border border-dashed border-border px-3 py-6 text-center">
+                <p className="text-[12px] text-muted-foreground">Nothing needs attention.</p>
+                {/* The counters are shown, not hidden: an empty list on its own cannot be told
+                    apart from a broken scan, so the numbers that distinguish them are visible. */}
+                <p className="mt-1.5 text-[10px] text-muted-foreground/60">
                   {out.scanned} transactions scanned · {out.candidates} created objects read
-                </span>
-              </p>
+                </p>
+              </div>
             )}
-            {/* The counters are shown, not hidden: an empty list on its own cannot be told
-                apart from a broken scan, so the numbers that distinguish them are visible. */}
-            <ul className="space-y-2">
-              {(out?.orders ?? []).map((o) => {
+
+            <ul className="flex flex-col gap-2">
+              {outstanding.map((o) => {
                 const left = countdown(o.expiresAtMs);
                 return (
-                  <li key={o.orderId} className="rounded border border-white/10 p-2">
+                  <li key={o.orderId} className="rounded-lg border border-border bg-card p-2.5">
                     <div className="flex items-center gap-2">
-                      <span className={cn(
-                        'rounded px-1.5 text-[10px]',
-                        o.state === 'settled'
-                          ? 'bg-emerald-500/15 text-emerald-300'
-                          : 'bg-sky-500/15 text-sky-300',
-                      )}>
-                        {o.state}
-                      </span>
-                      <span className="text-[11px] text-white/40">
+                      <Pill tone={o.state === 'settled' ? 'chain' : 'muted'}>{o.state}</Pill>
+                      <span className="text-[11px] text-muted-foreground">
                         {o.state === 'settled'
-                          ? 'storage is yours to reclaim'
+                          ? 'storage is yours'
                           : left === null
-                            ? 'expired — revocable'
+                            ? 'expired'
                             : `expires in ${left}s`}
                       </span>
                     </div>
-                    <div className="mt-1 break-all font-mono text-[10px] text-white/35">
+                    <div className="mt-1.5 break-all font-mono text-[10px] leading-relaxed text-muted-foreground/70">
                       {o.orderId}
                     </div>
                     <Button
@@ -241,17 +271,17 @@ export function LeftPane({ events, say, onTerms }: { events: Event[]; say: Say; 
                 );
               })}
             </ul>
-            {out && out.orders.length > 0 && (
-              <p className="mt-3 text-[10px] text-white/25">
-                snapshot · {out.scanned} transactions scanned · {out.orderObjects} order
-                object(s) on chain
+
+            {out && outstanding.length > 0 && (
+              <p className="mt-3 px-1 text-[10px] text-muted-foreground/60">
+                snapshot · {out.scanned} scanned · {out.orderObjects} on chain
               </p>
             )}
           </>
         )}
       </div>
 
-      <div className="border-t border-white/10 p-2">
+      <div className="shrink-0 border-t border-border p-2">
         <Button size="sm" variant="ghost" className="w-full" onClick={() => void load()}>
           refresh
         </Button>
