@@ -144,7 +144,7 @@ export function SigningPane({
                   'transition-colors',
                   done && 'text-muted-foreground',
                   now && 'font-medium text-foreground',
-                  !done && !now && 'text-muted-foreground/50',
+                  !done && !now && 'text-muted-foreground',
                 )}>
                   {s}
                 </span>
@@ -201,7 +201,7 @@ export function SigningPane({
               </li>
             ))}
           </ul>
-          <p className="mt-2.5 text-[11px] leading-relaxed text-muted-foreground/70">
+          <p className="mt-2.5 text-[11px] leading-relaxed text-muted-foreground">
             Read from the chain, not from what we said would happen.
           </p>
         </section>
@@ -211,7 +211,7 @@ export function SigningPane({
         <div className="rounded-lg border border-dashed border-border px-4 py-6 text-center">
           <p className="text-[12px] leading-relaxed text-muted-foreground">
             Nothing yet.
-            <span className="mt-1 block text-muted-foreground/60">
+            <span className="mt-1 block text-muted-foreground">
               The terms appear here before the wallet asks for a signature.
             </span>
           </p>

@@ -1418,6 +1418,34 @@ const PAGE = `<!doctype html>
 </div>
 
 <div class="hires" id="hires"><span class="label">hires</span></div>
+    // The theme's two families, and only these. Each package writes its faces to ./files/, which
+    // the CSS build rewrites to /fonts/, so one flat namespace is enough: the package name is a
+    // prefix of every file, which is what keeps the basename unique across the two directories.
+    // Both are searched rather than one path being derived, so neither can be guessed at.
+    const fontDirs = [
+      'node_modules/@fontsource-variable/nunito/files',
+      'node_modules/@fontsource/pt-serif/files',
+    ];
+    for (const dir of fontDirs) {
+      try {
+        // Annotated explicitly because two configs were disagreeing about it. `readFileSync`
+        // without an encoding returns a Buffer, which IS a Uint8Array — the compiler agreed
+        // with that and the editor did not, depending on which tsconfig each had loaded. Saying
+        // the type rather than inferring it removes the question, and costs nothing.
+        const file: Uint8Array = fs.readFileSync(path.join(dir, name));
+        return send(200, file, 'font/woff2');
+      } catch {
+        // Not in this package. Try the next, and only 404 once every one has been tried.
+      }
+    }
+    return send(404, 'no such font', 'text/plain; charset=utf-8');
+  }
+
+  if (req.method === 'GET' && req.url === '/texture.png') {
+    // The theme's paper grain. A literal path, like the page modules above, so the request can
+    // never steer the read out of src/web/app/. Bytes rather than text: it is a PNG, and it is
+    // served from here rather than fetched from the theme's CDN for the same reason the fonts
+    // and the wallet bundle are.
 
 <div class="wrap">
   <div class="pane">
@@ -1514,15 +1542,10 @@ const server = http.createServer((req, res) => {
     const name = path.basename((req.url ?? '').split('?')[0]);
     if (!/^[a-z0-9-]+\.woff2$/.test(name)) return send(404, 'not found', 'text/plain; charset=utf-8');
     try {
-      // Annotated explicitly because two configs were disagreeing about it. `readFileSync`
-      // without an encoding returns a Buffer, which IS a Uint8Array — the compiler agreed
-      // with that and the editor did not, depending on which tsconfig each had loaded. Saying
-      // the type rather than inferring it removes the question, and costs nothing.
-      const file: Uint8Array = fs.readFileSync(
-        path.join('node_modules/@fontsource-variable/inter/files', name));
-      return send(200, file, 'font/woff2');
+      const file: Uint8Array = fs.readFileSync('src/web/app/texture.png');
+      return send(200, file, 'image/png');
     } catch {
-      return send(404, 'no such font', 'text/plain; charset=utf-8');
+      return send(404, 'no texture', 'text/plain; charset=utf-8');
     }
   }
 

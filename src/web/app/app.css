@@ -1,93 +1,122 @@
 /*
- * The design tokens.
+ * The Matsu theme (matsu-theme.vercel.app, Matt Wierzbicki), applied to this app.
  *
- * Adapted from the Bloks design system (github.com/hamedgitty/bloks), which is shadcn
- * new-york on a zinc base with CSS variables. What was worth taking is not the colours but the
- * STRUCTURE — semantic names, one place to change them, and a scale for everything that has
- * one. The previous version of this file had a hand-rolled oklch palette and nothing else,
- * which is why the app read as three flat boxes: no `--sidebar`, no `--card`, no `--brand`,
- * and every other colour chosen inline per component.
+ * A Ghibli-inspired shadcn/ui theme: a cream watercolour ground, sepia ink, ink-lined 2px
+ * borders, bold type, hard "printed" shadows instead of soft ones, and a paper-grain overlay.
  *
- * WHY SEMANTIC NAMES AND NOT COLOUR NAMES: `--card` can be retuned once and every card
- * follows. `bg-white/5` cannot — it is a decision, repeated in twenty files, that nobody can
- * change without finding all twenty.
+ * PASTED, NOT INSTALLED. There is no shadcn CLI in this repo (no components.json), and the
+ * registry's install command targets a Next.js layout this app does not have. The registry's
+ * style layer is `cssVars` + one `css` block; this file is that, translated.
  *
- * DARK ONLY, for now. The `.dark` class is kept as the switch rather than assumed, so a light
- * palette is a second block rather than a rewrite.
+ * WHAT WAS TAKEN: the tokens and the base-layer rules, plus this app's three vendored
+ * primitives. WHAT WAS NOT: the registry's component bundle, which is the full shadcn set (38
+ * components, with radix, cmdk, vaul, react-hook-form and next-themes as peers) — none of it is
+ * installed here, and fetching it to restyle three files would add a dependency tree for nothing.
+ *
+ * LIGHT ONLY. The registry ships no dark block. `color-scheme: light`, and there is deliberately
+ * no .dark block: the previous version of this file put its palette behind a class nothing ever
+ * set, so every var() fell back and the app rendered black on white. A palette behind a selector
+ * nobody applies is not a palette.
+ *
+ * WHY SEMANTIC NAMES AND NOT COLOUR NAMES: `--card` can be retuned once and every card follows.
+ * `bg-white/5` cannot — it is a decision, repeated in twenty files, that nobody can change
+ * without finding all twenty.
+ *
+ * THIS APP'S OWN TOKEN NAMES ARE KEPT, aliased onto Matsu's. `--brand` is used in ~15 places,
+ * and `--chain`/`--advisory` classify every transcript event, so those names stay and now
+ * resolve to Matsu colours. Renaming them would be a larger diff for the same picture.
  */
 
-/* Self-hosted rather than fetched: this app runs on loopback and should not depend on a
-   CDN to render correctly. Imported HERE rather than from JS — a CSS-carrying package
-   imported from the entry point makes bun emit a second module called app.js, which
-   collides with the bundle output. */
-@import "@fontsource-variable/inter";
+/* Self-hosted rather than fetched: this app runs on loopback and should not depend on a CDN to
+   render correctly. Imported HERE rather than from JS — a CSS-carrying package imported from
+   the entry point makes bun emit a second module called app.js, which collides with the
+   bundle output. */
+@import "@fontsource-variable/nunito";
+@import "@fontsource/pt-serif/400.css";
+@import "@fontsource/pt-serif/700.css";
 
 @import "tailwindcss";
-
-@custom-variant dark (&:where(.dark, .dark *));
 
 /* ── Tokens ─────────────────────────────────────────────────────────── */
 
 /*
- * IN :root, NOT .dark.
+ * IN :root, because :root always applies and cannot be forgotten the way a class can.
  *
- * They were in a .dark block and nothing ever set that class, so every var() resolved to
- * nothing and the whole app rendered black on white. A palette that lives behind a selector
- * nobody applies is not a palette, and the failure is invisible: undefined custom properties
- * do not error, they fall back.
- *
- * :root always applies, so this cannot be forgotten the way a class can. There is no .dark
- * block: the app is dark only, and a light palette would be a `:root:not(.dark)` block plus the
- * class on <html>, added deliberately rather than assumed to exist.
+ * The cream ground and the sepia ink are the theme. Everything else is one step away from them:
+ * surfaces differ by a few thousandths of lightness rather than by hue, which is what makes the
+ * three panes read as one sheet of paper instead of three boxes.
  */
 :root {
-  color-scheme: dark;
+  color-scheme: light;
 
-  --background: #0e0e10;
-  --foreground: #ededf0;
+  /* Matsu's light palette, verbatim from the registry. */
+  --background: oklch(0.91 0.048 83.6);
+  --foreground: oklch(0.41 0.077 78.9);
 
-  /* The sidebar is its OWN surface. This is the single biggest reason a three-pane
-     layout reads as one workspace instead of three boxes: the panes differ by colour,
-     not only by a hairline border. */
-  --sidebar: #131316;
-  --card: #17171a;
-  --card-foreground: #ededf0;
-  --popover: #1a1a1e;
-  --popover-foreground: #ededf0;
+  --card: oklch(0.92 0.042 83.6);
+  --card-foreground: oklch(0.41 0.077 74.3);
+  --popover: oklch(0.92 0.042 83.6);
+  --popover-foreground: oklch(0.41 0.077 74.3);
 
-  --primary: #ededf0;
-  --primary-foreground: #131316;
-  --secondary: #232328;
-  --secondary-foreground: #ededf0;
-  --muted: #1e1e23;
-  --muted-foreground: #8f8f99;
-  --accent: #202025;
-  --accent-foreground: #ededf0;
+  /* The one accent: a muted forest green. */
+  --primary: oklch(0.71 0.097 111.7);
+  --primary-foreground: oklch(0.98 0.005 0);
+  --primary-border: oklch(0.59 0.096 111.8);
 
-  /* The one accent. Used for the focus ring, selection, and anything that should read as
-     OURS rather than as a status. */
-  --brand: #7c8aff;
-  --brand-foreground: #14151f;
-  --brand-soft: rgba(124, 138, 255, 0.14);
+  --secondary: oklch(0.88 0.055 83.6);
+  --secondary-foreground: oklch(0.51 0.077 78.9);
+  --muted: oklch(0.86 0.064 83.7);
+  /* THE FLOOR. This is the lightest text that clears 4.5:1 on this cream, so there is no lighter
+     TIER — and opacity modifiers do not make one. They were a dark-theme idiom: light text at 60%
+     on near-black still reads, but sepia at 60% on cream is 2.25:1, and at 50% it is 1.94:1.
+     Measured, over `--background`: /100 4.45, /80 3.12, /70 2.64, /60 2.25, /50 1.94, /40 1.68.
+     The component pass therefore removed every `text-muted-foreground/NN`: hierarchy below this
+     line is not available on this palette, and the components carry it with size, weight and case
+     instead (which they already did). If a quieter tier is ever genuinely needed, it has to come
+     from a DARKER value and a name, not from an alpha. */
+  --muted-foreground: oklch(0.51 0.077 74.3);
+  --accent: oklch(0.86 0.055 83.6);
+  --accent-foreground: oklch(0.26 0.016 0);
 
-  /* Status colours carry MEANING, so they have to be readable at 11px on their own tint,
-     which is where a badge puts them. These clear 4.5:1 against the surfaces above. */
-  --destructive: #ff6369;
-  --destructive-foreground: #1a0d0e;
-  --success: #3dd68c;
-  --warning: #f5a524;
+  /* The sidebar is its OWN surface, one step down from the page. Matsu gives it its own colour
+     rather than a tint of the background, and that (not the hairline border) is what makes a
+     three-pane layout read as a workspace. */
+  --sidebar: oklch(0.87 0.059 83.7);
+  --sidebar-foreground: oklch(0.41 0.077 78.9);
 
-  --border: rgba(255, 255, 255, 0.09);
-  --input: rgba(255, 255, 255, 0.13);
-  --ring: #7c8aff;
+  --destructive: oklch(0.63 0.24 29.2);
+  --destructive-foreground: oklch(0.97 0.018 0);
+  --destructive-border: oklch(0.43 0.24 29.2);
 
-  --shadow-color: rgba(0, 0, 0, 0.45);
+  /* STATUS COLOURS ARE OURS, chosen against cream rather than reused from the old dark palette.
+     The old values (a light mint, a bright amber) were picked to sit on a near-black ground and
+     would have washed out here.
+     NOT CHOSEN BY EYE. These are the LIGHTEST values that still clear 4.5:1 against their own
+     15%/20% tint, which is exactly how LeftPane's pills use them (`bg-success/15 text-chain`,
+     `bg-warning/20 text-advisory`) at 10px. Measured: success 4.50/5.62, warning 4.50/6.07.
+     Anything lighter is prettier and unreadable at 10px. */
+  --success: oklch(0.44 0.12 152);
+  --warning: oklch(0.44 0.13 62);
+
+  /* The app's accent. The SAME value as --primary on purpose: this app has one accent and
+     Matsu's green is it, so `text-brand` and `bg-primary` agree by construction, not by luck.
+     --brand-soft is a tint for the "you" bubble and the "now" chip. */
+  --brand: var(--primary);
+  --brand-foreground: var(--primary-foreground);
+  --brand-soft: oklch(0.71 0.097 111.7 / 0.22);
+
+  /* Matsu draws borders in a real tan rather than a translucent ink, and at 2px (below) — the
+     outline is a drawn line, which is most of the theme's character. */
+  --border: oklch(0.74 0.063 80.8);
+  --input: oklch(0.74 0.063 80.8);
+  --ring: oklch(0.51 0.077 74.3);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
   --color-popover: var(--popover);
@@ -115,20 +144,35 @@
    *
    * A model's words are ADVISORY, our own progress is UNCONFIRMED, and a chain-read fact is
    * AUTHORITATIVE. They are colour-coded because that distinction has to be visible at a
-   * glance — if they render alike, the interface is telling the user that a guess and a
-   * settled transaction are the same kind of thing.
+   * glance — if they render alike, the interface is telling the user that a guess and a settled
+   * transaction are the same kind of thing.
    *
-   * Warning, muted, and success — reused rather than invented, so retuning the status
-   * palette retunes these too. */
+   * Warning, muted, and success — reused rather than invented, so retuning the status palette
+   * retunes these too. */
   --color-advisory: var(--warning);
   --color-pipeline: var(--muted-foreground);
   --color-chain: var(--success);
 
-  --font-sans: "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont,
+  /* Matsu's shadows are all one hard 2px offset with no blur — a printed edge, not a lift.
+     Every size maps to the same edge deliberately: a theme with nine shadow sizes has no
+     opinion, and this one does. */
+  --shadow-2xs: 0 2px 0 0 var(--border);
+  --shadow-xs: 0 2px 0 0 var(--border);
+  --shadow-sm: 0 2px 0 0 var(--border);
+  --shadow-md: 0 2px 0 0 var(--border);
+  --shadow-lg: 0 2px 0 0 var(--border);
+  --shadow-xl: 0 2px 0 0 var(--border);
+  --shadow-2xl: 0 2px 0 0 var(--border);
+
+  --font-sans: "Nunito Variable", "Nunito", -apple-system, BlinkMacSystemFont,
     "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  --font-serif: "PT Serif", Georgia, "Times New Roman", serif;
   --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
 
-  /* A SCALE, not ad-hoc rounded-md. Every surface picks from these five. */
+  /* A SCALE, not ad-hoc rounded-md. Every surface picks from these five.
+     These are Matsu's numbers: the registry sets `--radius: 0.625rem`, and Tailwind derives
+     sm = radius - 4px, md = radius - 2px, lg = radius, xl = radius + 4px, 2xl = radius + 8px.
+     Written out explicitly so the scale is visible in one place. */
   --radius-sm: 6px;
   --radius-md: 8px;
   --radius-lg: 10px;
@@ -167,9 +211,11 @@
     background-color: var(--background);
     color: var(--foreground);
     font-family: var(--font-sans);
-    /* Inter is drawn slightly loose at UI sizes; this is what makes it read as a product
-       rather than as a webpage. */
-    letter-spacing: -0.011em;
+    /* BOLD BY DEFAULT, and that is the theme rather than an accident: Matsu sets every
+       --font-weight-* token to 700, so there is no light text in it anywhere. Nunito is a
+       rounded face with a tall x-height, which is what keeps 700 at 11px from reading as a wall.
+       No letter-spacing: the -0.011em that Inter needed is wrong for Nunito. */
+    font-weight: 700;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
@@ -177,6 +223,43 @@
   /* An app, not a document: buttons are not links and should not advertise themselves. */
   button {
     cursor: default;
+  }
+
+  /* THE 2px INK LINE. Exactly what the registry does, and it is a global override for a reason:
+     the theme's whole character is that every edge is drawn. It beats Tailwind's utilities with
+     `!important` on purpose — `border` and `border-b` would otherwise stay at 1px and the
+     surfaces would stop looking like a drawing.
+     ponytail: global and heavy-handed by design, so it cannot be scoped. If a 1px hairline is
+     ever genuinely needed (a dense data table, say), that needs a variant, not a local override. */
+  .border { border-width: 2px !important; }
+  .border-l { border-left-width: 2px !important; }
+  .border-r { border-right-width: 2px !important; }
+  .border-t { border-top-width: 2px !important; }
+  .border-b { border-bottom-width: 2px !important; }
+
+  /* The printed edge, in colour, for the two places it means something. */
+  .shadow-primary { box-shadow: 0 2px 0 0 var(--primary-border); }
+  .shadow-destructive { box-shadow: 0 2px 0 0 var(--destructive); }
+  .shadow-destructive-border { box-shadow: 0 2px 0 0 var(--destructive-border); }
+
+  /* THE PAPER GRAIN. Fixed over the whole viewport, above everything (z-index 100) and
+     non-interactive. Multiply blend, so it darkens the cream rather than washing it out.
+     Served from src/web/app/texture.png on our own origin — a local-first tool that fetched its
+     texture off a CDN at page load would have given back the property it was selling, the same
+     reason the fonts and the wallet bundle are served locally. */
+  .texture {
+    background-image: url(/texture.png);
+    background-size: 100% 100%;
+    background-repeat: repeat;
+    opacity: 0.12;
+    mix-blend-mode: multiply;
+    z-index: 100;
+    isolation: isolate;
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100dvh;
+    pointer-events: none;
   }
 
   /* ONE FOCUS RING, for keyboard users only, drawn as a shadow rather than an outline so it

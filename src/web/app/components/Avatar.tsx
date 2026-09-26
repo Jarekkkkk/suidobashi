@@ -157,6 +157,15 @@ function mix(hex: string, target: string, amount: number): string {
   return `#${((ch(16) << 16) | (ch(8) << 8) | ch(0)).toString(16).padStart(6, '0')}`;
 }
 
+/*
+ * The tile shades are TOKENS, and that is why `mix` is gone.
+ *
+ * It used to take a hex string and darken it in JS, which meant the four source colours had to be
+ * literals here — and a literal beside a token is a second place for the same decision, which is
+ * how a palette drifts. `color-mix` is CSS, so the tile can be `var(--primary)` and the dither
+ * layer can still be derived from it. Twenty lines of hex arithmetic replaced by one declaration.
+ */
+
 /** Smooth white eyes on a pixel body — the contrast is the charm. */
 function Face({ mood, fy }: { mood: 'deadpan' | 'focused' | 'friendly'; fy: number }) {
   const stroke = {
@@ -214,7 +223,6 @@ export function Creature({
 }) {
   const uid = useId();
   const base = color;
-  const deep = mix(base, '#000000', 0.22);
   const body = BODIES[shape] ?? BODIES.star;
   const clipId = `${uid}c`;
 
@@ -234,8 +242,10 @@ export function Creature({
         </clipPath>
       </defs>
       <g clipPath={`url(#${clipId})`}>
-        <rect width="100" height="100" fill={base} />
-        <g fill={deep}>
+        {/* `style` rather than the fill attribute: a presentation attribute carrying a var() or a
+            color-mix() is parsed as CSS on modern browsers, but the style property always is. */}
+        <rect width="100" height="100" style={{ fill: base }} />
+        <g style={{ fill: 'color-mix(in srgb, currentColor 78%, #000)', color: base }}>
           {DITHER.map(({ x, y }) => (
             <rect key={`${x}-${y}`} x={x * 5} y={y * 5} width={5} height={5} />
           ))}
@@ -256,10 +266,10 @@ export function Creature({
  * is four entries — a hash would be more code for a worse guarantee.
  */
 export const SOURCE_CREATURE: Record<string, { shape: keyof typeof BITMAPS; color: string; mood: 'deadpan' | 'focused' | 'friendly' }> = {
-  you: { shape: 'star', color: '#7c8aff', mood: 'friendly' },
-  model: { shape: 'burst', color: '#f5a524', mood: 'deadpan' },
-  pipeline: { shape: 'diamond', color: '#6b7280', mood: 'focused' },
-  chain: { shape: 'bit', color: '#3dd68c', mood: 'deadpan' },
+  you: { shape: 'star', color: 'var(--primary)', mood: 'friendly' },
+  model: { shape: 'burst', color: 'var(--warning)', mood: 'deadpan' },
+  pipeline: { shape: 'diamond', color: 'var(--muted-foreground)', mood: 'focused' },
+  chain: { shape: 'bit', color: 'var(--success)', mood: 'deadpan' },
 };
 
 export function SourceAvatar({ source, size = 22 }: { source: string; size?: number }) {

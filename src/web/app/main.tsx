@@ -159,6 +159,11 @@ function App() {
 
   return (
     <div className="flex h-full min-w-0 overflow-hidden bg-background text-foreground">
+    <>
+    {/* The theme's paper grain: fixed, full-viewport, and out of the flex flow entirely rather
+        than a flex item that happens to be positioned. A sibling of the app shell, not a child,
+        so no pane can ever lay out around it. */}
+    <div className="texture" />
       {/* Left — what is installed, and what is left over. Its own surface, so it reads as a
           region of the app rather than as a box with a border. */}
       <aside className={cn(
@@ -221,6 +226,7 @@ function App() {
       </aside>
     </div>
   );
+    </>
 }
 
 const root = document.getElementById('app');

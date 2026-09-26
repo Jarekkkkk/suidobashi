@@ -290,7 +290,7 @@ export function Chat({
         {empty ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
             <p className="text-[13px] text-muted-foreground">Ask for something.</p>
-            <p className="max-w-[36ch] text-[12px] leading-relaxed text-muted-foreground/60">
+            <p className="max-w-[36ch] text-[12px] leading-relaxed text-muted-foreground">
               The gate checks it before anything is built, and the terms appear in the signing
               pane before your wallet is asked.
             </p>
@@ -311,7 +311,7 @@ export function Chat({
             {hidden && (
               <button
                 onClick={() => setShowSteps(true)}
-                className="mb-1.5 self-start rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground"
+                className="mb-1.5 self-start rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               >
                 {steps} steps · show
               </button>
@@ -331,7 +331,7 @@ export function Chat({
                     className="animate-fade-in flex items-center gap-2.5 py-0.5 pl-1"
                   >
                     <SourceAvatar source={e.source} size={14} />
-                    <span className="min-w-0 whitespace-pre-line break-words text-[12px] leading-relaxed text-muted-foreground/70">
+                    <span className="min-w-0 whitespace-pre-line break-words text-[12px] leading-relaxed text-muted-foreground">
                       {e.text}
                     </span>
                   </div>
@@ -412,11 +412,13 @@ export function Chat({
             // fails is worse than no placeholder.
             placeholder={address ? 'swap 1 SUI to USDC' : 'connect a wallet first'}
             disabled={busy || !address}
-            className="min-w-0 flex-1 bg-transparent py-1 text-[13px] outline-none placeholder:text-muted-foreground/50"
+            className="min-w-0 flex-1 bg-transparent py-1 text-[13px] outline-none placeholder:text-muted-foreground"
           />
           <Button
             size="icon"
-            variant={text.trim() && !busy && address ? 'brand' : 'ghost'}
+            // `default`, not `brand`: this theme has one accent and both names resolve to the same
+            // green, so the second variant was the same button under a different name.
+            variant={text.trim() && !busy && address ? 'default' : 'ghost'}
             onClick={() => void send()}
             disabled={busy || !text.trim() || !address}
             aria-label="send"

@@ -122,7 +122,7 @@ export function TalentsPane() {
               spellCheck={false}
               className={cn(
                 'min-w-0 flex-1 rounded-sm border border-input bg-background px-2 py-1.5',
-                'font-mono text-[11px] outline-none placeholder:text-muted-foreground/40',
+                'font-mono text-[11px] outline-none placeholder:text-muted-foreground',
                 'focus:border-brand/60',
               )}
             />
@@ -160,7 +160,7 @@ export function TalentsPane() {
                 <div className="flex items-center gap-2">
                   <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{t.name}</span>
                   {version && (
-                    <span className="shrink-0 text-[10px] text-muted-foreground/60">v{version}</span>
+                    <span className="shrink-0 text-[10px] text-muted-foreground">v{version}</span>
                   )}
                   {on ? (
                     <>
@@ -188,7 +188,7 @@ export function TalentsPane() {
                 <div className="mt-2 flex flex-col gap-1.5 border-t border-border pt-2">
                   {t.actions.map((a) => (
                     <div key={a.id} className="flex items-baseline gap-2">
-                      <span className="w-[68px] shrink-0 text-right text-[10px] uppercase tracking-wide text-muted-foreground/60">
+                      <span className="w-[68px] shrink-0 text-right text-[10px] uppercase tracking-wide text-muted-foreground">
                         you can
                       </span>
                       <span className="shrink-0 rounded-sm bg-brand-soft px-1.5 py-0.5 font-mono text-[10px] text-brand">
@@ -201,20 +201,20 @@ export function TalentsPane() {
                   ))}
                   {on && theirs.map((a) => (
                     <div key={a.id} className="flex items-baseline gap-2">
-                      <span className="w-[68px] shrink-0 text-right text-[10px] uppercase tracking-wide text-muted-foreground/60">
+                      <span className="w-[68px] shrink-0 text-right text-[10px] uppercase tracking-wide text-muted-foreground">
                         the server
                       </span>
                       <span className="shrink-0 rounded-sm bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
                         {a.id}
                       </span>
-                      <span className="min-w-0 text-[11px] leading-relaxed text-muted-foreground/70">
+                      <span className="min-w-0 text-[11px] leading-relaxed text-muted-foreground">
                         {a.title ?? a.id}
                       </span>
                     </div>
                   ))}
                 </div>
 
-                <div className="mt-1.5 break-all font-mono text-[10px] text-muted-foreground/50">
+                <div className="mt-1.5 break-all font-mono text-[10px] text-muted-foreground">
                   {t.server}
                 </div>
               </li>

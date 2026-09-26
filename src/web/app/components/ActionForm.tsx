@@ -70,7 +70,7 @@ export function ActionForm({
                   placeholder={f.placeholder}
                   className={cn(
                     'rounded-sm border border-input bg-background px-1.5 py-1 font-mono',
-                    'text-[11px] text-foreground outline-none placeholder:text-muted-foreground/40',
+                    'text-[11px] text-foreground outline-none placeholder:text-muted-foreground',
                     'focus:border-brand/60',
                     WIDTHS[f.width ?? 'sm'],
                   )}

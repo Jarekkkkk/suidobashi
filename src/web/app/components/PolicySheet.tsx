@@ -174,7 +174,7 @@ export function PolicySheet({
                 </div>
               ))}
               {venues.length === 0 && (
-                <p className="px-1 text-[11px] text-muted-foreground/60">no venue approved</p>
+                <p className="px-1 text-[11px] text-muted-foreground">no venue approved</p>
               )}
               <div className="flex items-center gap-1.5">
                 <input
@@ -240,14 +240,14 @@ export function PolicySheet({
 }
 
 const inputCls =
-  'w-full rounded-md border border-border bg-background px-2 py-1.5 font-mono text-[12px] text-foreground outline-none placeholder:text-muted-foreground/50 focus-visible:border-ring';
+  'w-full rounded-md border border-border bg-background px-2 py-1.5 font-mono text-[12px] text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring';
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1.5">
       <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{label}</div>
       {children}
-      {hint && <p className="text-[10px] leading-relaxed text-muted-foreground/60">{hint}</p>}
+      {hint && <p className="text-[10px] leading-relaxed text-muted-foreground">{hint}</p>}
     </div>
   );
 }

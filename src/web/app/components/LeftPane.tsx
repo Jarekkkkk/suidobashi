@@ -301,7 +301,7 @@ export function LeftPane({
                 <p className="text-[12px] text-muted-foreground">Nothing needs attention.</p>
                 {/* The counters are shown, not hidden: an empty list on its own cannot be told
                     apart from a broken scan, so the numbers that distinguish them are visible. */}
-                <p className="mt-1.5 text-[10px] text-muted-foreground/60">
+                <p className="mt-1.5 text-[10px] text-muted-foreground">
                   {out.scanned} transactions scanned · {out.candidates} created objects read
                 </p>
               </div>
@@ -322,7 +322,7 @@ export function LeftPane({
                             : `expires in ${left}s`}
                       </span>
                     </div>
-                    <div className="mt-1.5 break-all font-mono text-[10px] leading-relaxed text-muted-foreground/70">
+                    <div className="mt-1.5 break-all font-mono text-[10px] leading-relaxed text-muted-foreground">
                       {o.orderId}
                     </div>
                     <Button
@@ -344,7 +344,7 @@ export function LeftPane({
             </ul>
 
             {out && outstanding.length > 0 && (
-              <p className="mt-3 px-1 text-[10px] text-muted-foreground/60">
+              <p className="mt-3 px-1 text-[10px] text-muted-foreground">
                 snapshot · {out.scanned} scanned · {out.orderObjects} on chain
               </p>
             )}

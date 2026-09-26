@@ -11,6 +11,12 @@ import { cn } from '@/lib/utils';
  *
  * The variant names are the registry's; only the colours changed, and they are now token
  * references rather than literal `white/10` values. A variant can be retuned in one place.
+ *
+ * THE `brand` VARIANT IS GONE. It was a second accent beside `primary`, and this theme has one:
+ * `--brand` and `--primary` are the same green, so the variant drew the same button twice. It
+ * had no callers — every one of them used `default`, `ghost`, `outline` or `destructive`.
+ * `shadow-primary` is the theme's hard 2px printed edge, which is what makes a filled button
+ * read as pressed into the sheet.
  */
 const buttonVariants = cva(
   'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-[13px] '
@@ -19,11 +25,10 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: 'bg-primary text-primary-foreground hover:bg-primary/90',
+        default: 'bg-primary text-primary-foreground shadow-primary hover:bg-primary/90',
         outline: 'border border-border bg-transparent hover:bg-accent hover:text-accent-foreground',
         ghost: 'hover:bg-accent hover:text-accent-foreground',
-        brand: 'bg-brand text-brand-foreground hover:bg-brand/90',
-        destructive: 'bg-destructive text-destructive-foreground hover:bg-destructive/90',
+        destructive: 'bg-destructive text-destructive-foreground shadow-destructive hover:bg-destructive/90',
       },
       size: {
         default: 'h-8 px-3',

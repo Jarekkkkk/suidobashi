@@ -123,7 +123,7 @@ export function ChatsPane({
         {chats !== null && chats.length === 0 && (
           <div className="rounded-lg border border-dashed border-border px-3 py-6 text-center">
             <p className="text-[12px] text-muted-foreground">No conversations yet.</p>
-            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground/60">
+            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
               A chat keeps its own history, so the model can be given it back.
             </p>
           </div>
@@ -168,7 +168,7 @@ export function ChatsPane({
                     <div className="flex items-baseline gap-2">
                       <span className="min-w-0 flex-1 truncate text-[12px]">{c.title}</span>
                       <span className={cn(
-                        'shrink-0 text-[10px] text-muted-foreground/60',
+                        'shrink-0 text-[10px] text-muted-foreground',
                         // The actions replace the timestamp on hover, so the row does not grow.
                         'group-hover:opacity-0',
                       )}>

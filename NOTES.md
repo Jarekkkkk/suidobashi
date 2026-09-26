@@ -368,6 +368,14 @@ reloading the browser shows the OLD theme. The page modules (`page.js`, `markup.
 request and do not have this property — the two behave differently, which is what makes it a
 trap rather than a rule. Restart the server after a style change, or check on a second port.
 
+**An opacity tier on a TEXT COLOUR is a dark-theme assumption.** `text-muted-foreground/60` reads
+fine on near-black and is 2.25:1 on cream; `/50` is 1.94:1, `/40` is 1.68:1. Matsu's
+`--muted-foreground` is itself the floor at 4.45:1, so on this palette there is no lighter tier at
+all — 21 sites in six components became the plain token, and the hierarchy they encoded is carried
+by size, weight and case instead. The measurements live in `app.css` beside the token. ANY palette
+swap has to be checked for this: the `/NN` suffixes are invisible in a diff of the theme file
+alone, and every one of them was fine before.
+
 ***
 
 The CLI scripts under `src/` are **dry-run or `--emit-bytes` only** — there is no
