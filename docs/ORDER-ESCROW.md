@@ -74,7 +74,12 @@ an object's storage rebate     ~0.0044 SUI    (burn 5gko7Lna…: net +0.0041 aft
 a settlement's gas             ~0.0043 SUI
 ```
 
-So a dedicated burn costs about 0.0003 and returns about 0.0044 — a net gain of
+A second burn measured 0.004198392 SUI of rebate against 0.0001 of computation — net
+**+0.004098392**. So the rebate runs 0.0042–0.0044 depending on the order, and both figures
+are real transactions rather than estimates. A UI quoting "about 0.0042" and this document
+saying 0.0044 are describing the same thing within the spread.
+
+So a dedicated burn costs about 0.0001–0.0003 and returns about 0.0042–0.0044 — a net gain of
 **+0.0041**, which nearly covers a settlement's gas. The first version of this note
 estimated ~0.0018 from comparable objects; the measured figure is roughly 2.4× that,
 which is worth knowing because it makes the reclaim materially more valuable than the

@@ -124,12 +124,13 @@ original page stays at `/` as the reference the port is checked against.
       carry `source` and `data`, so this is rendering rather than plumbing. The point of
       the pane is that a claim of success and a chain-read fact must not look alike.
 - [ ] **An "outstanding" tab** in the left pane, alongside agents: settled-but-unburned,
-      expired-but-unrevoked, and unfilled orders, each with its action. This is where
-      "notified, not watching" gets an honest answer — something has to watch, and it
-      should be the user with a place that shows them. **Discovery is proven:**
-      `listTransactions({ filter: { sender } })` honours its filter and validates it,
-      unlike `listEvents`. It is a chain read, so it is a snapshot and should say when it
-      last checked.
+      expired-but-unrevoked, and unfilled orders, each with its action. **Discovery is
+      proven:** `listTransactions({ filter: { sender } })` honours its filter and validates
+      it, unlike `listEvents` — so the earlier "notified, not watching" was a limitation of
+      one method, not of the tooling. The notification stays as the fill path because it is
+      simpler and the maker already has the id; this tab is the other half, for orders the
+      session no longer holds. It is a chain read, so it is a snapshot and should say when
+      it last checked.
 - [ ] Port the remaining flows: the order form, owner actions, hires, stats.
 - [ ] Delete the original page once nothing is left to compare against.
 - [ ] Decide React-in-page against **one** swap template, so the rewrite is

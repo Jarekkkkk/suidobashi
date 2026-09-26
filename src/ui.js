@@ -542,10 +542,16 @@ function actionFor(kind, body) {
 
     return {
       script: 'node src/create-order.js',
-      // No TTL from the browser: the UI has no field for it, so the script's own
-      // 24-hour default applies. Passing one through was a bug — `toMist(undefined)`
-      // returns 0n, and `0n ?? default` is 0n, so a missing value silently became a
-      // ZERO-length order that `create` refused as already expired.
+      // No TTL from the browser: the UI has no field for it, so the script's own default
+      // applies — 60 seconds, set in create-order.js. (This comment said 24 hours, which
+      // was never true; the TTL has always been a minute, and ORDER-ESCROW.md and
+      // MCP-STANDARD.md both say so.)
+      //
+      // Passing one through was a bug, and the fix for it was deeper than this call site:
+      // `toMist(undefined)` returned 0n, and `0n ?? default` is 0n, so a missing value
+      // silently became a ZERO-length order that `create` refused as already expired. That
+      // is fixed at the source — toMist now returns null for absent input, which is what
+      // makes `??` work at all.
       env: {
         ORDER_AMOUNT_MIST: String(amount),
         ORDER_MIN_OUT: String(minOut),

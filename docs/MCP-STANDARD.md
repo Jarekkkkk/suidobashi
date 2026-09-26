@@ -239,14 +239,40 @@ Three rules that survive:
 ⑧ RECORD     digest, status, and reputation derived from EVENTS
 ```
 
-**Step ⑥ is a notification, not a watcher, and that is forced rather than chosen.**
-Polling for orders would need events or a by-type object query, and neither works: the
-SDK's `listEvents` **silently ignores every filter shape** — verified, `MoveModule`,
-`eventType` and `sender` all returned the same unfiltered results — and shared objects
-cannot be listed by type. So the maker's client tells the server, and the order's window
-has to be long enough for a machine to react. That is why the default is 60 seconds, and
-why the notification is automatic rather than something a person does: no human can
-create an order and relay its id inside a minute.
+**Step ⑥ is a notification rather than a poll, and that is CHOSEN, not forced.**
+
+An earlier version of this document said it was forced, and the reasoning was wrong. It
+tried the filter named `sender` on `listEvents`, watched it fail, and generalised to the
+whole SDK. Two facts were established and both still hold:
+
+```text
+listEvents              silently ignores EVERY filter shape — verified with MoveModule,
+                        eventType and sender, all returning the same unfiltered results
+shared objects by type  not queryable — orders are shared, so they cannot be listed
+```
+
+Neither implies what was concluded. A DIFFERENT method honours the same filter name, and
+**validates** it:
+
+```js
+await client.listTransactions({ filter: { sender: ADDRESS }, limit: 3 })
+```
+
+Passing `FromAddress` (the JSON-RPC spelling) is refused with *"A transaction filter must
+specify exactly one of sender, function"* — a refusal rather than a silent no-op. Proven by
+filtering: a nonsense address returns **0** rows while two real addresses each return 3. So
+a watcher IS buildable — enumerate the maker's transactions, read the order id from each
+create's effects, then check each order's state.
+
+**The notification remains the design, for a better reason than impossibility.** It is
+simpler, it needs no polling, and the maker already knows the id. A watcher is a thing to
+add when something needs to act on orders it did not create — not a prerequisite.
+
+**The 60-second default does not rest on this either.** It is short because a swap order is
+a short-lived intent rather than a standing offer, and because a short window makes a
+refund routine instead of exceptional. That the wire is automatic is a separate point: no
+human can create an order and relay its id inside a minute, so a person cannot be part of
+the loop regardless of how discovery works.
 
 **Step ⑦ is signed by the SERVER, not a wallet.** The policy's `agent` is the server's
 address, so only the server can reach the settle path — `ctx.sender() == policy.agent` is
