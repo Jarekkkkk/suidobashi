@@ -17,6 +17,9 @@ import { createRoot } from 'react-dom/client';
 import { useState, useEffect, useCallback } from 'react';
 import { wallet, short } from '@/lib/wallet';
 import { api, type Event } from '@/lib/api';
+// The vocabulary. ONE hop, not two: this file is at src/web/app/, so `..` is src/web/.
+// Extensionless, because a `.js` specifier resolves for the compiler and not for the server.
+import { TERMINAL_KINDS, type EventKind } from '../events';
 import { Chat } from '@/components/Chat';
 import { LeftPane } from '@/components/LeftPane';
 import { SigningPane } from '@/components/SigningPane';
@@ -77,6 +80,9 @@ function App() {
     // as its pipeline source.
     void api(`/api/chats/${chatId}`, {
       role: e.kind === 'ask' ? 'user' : e.source,
+      // THE KIND IS STORED TOO, and it is the field that matters: `role` cannot tell a refusal
+      // from an extraction, so a transcript rebuilt from roles alone lost every bubble.
+      kind: e.kind,
       text: e.text,
     }).catch(() => { /* the message is on screen either way */ });
   }, [chatId]);
@@ -84,12 +90,19 @@ function App() {
   /** Load a conversation's history into the transcript. */
   const openChat = useCallback(async (id: string) => {
     try {
-      const r = await api<{ messages: { role: string; text: string }[] }>(`/api/chats/${id}`);
+      const r = await api<{ messages: { role: string; kind: string | null; text: string }[] }>(
+        `/api/chats/${id}`,
+      );
       setEvents(r.messages.map((m) => ({
-        kind: m.role === 'user' ? 'ask' : m.role,
+        // The stored kind, not one derived from the role — deriving it is what lost the bubbles.
+        // A row from before the column existed has none, and renders as a step: wrong for old
+        // history, right for everything after, and no fallback invents a kind it cannot know.
+        kind: m.kind ?? '',
         source: (m.role === 'user' ? 'pipeline' : m.role) as Event['source'],
         text: m.text,
-        terminal: false,
+        // The same rule the server applies, so there is no second opinion about what terminal
+        // means. Hardcoding `false` here is what turned every reloaded answer into a progress row.
+        terminal: m.kind ? TERMINAL_KINDS.includes(m.kind as EventKind) : false,
       })));
       setChatId(id);
     } catch {

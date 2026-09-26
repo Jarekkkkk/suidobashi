@@ -1481,16 +1481,19 @@ const server = http.createServer((req, res) => {
       let raw = '';
       req.on('data', (c) => { raw += c; if (raw.length > 65536) req.destroy(); });
       req.on('end', () => {
-        let role: any = 'pipeline', text = '';
+        let role: any = 'pipeline', kind = '', text = '';
         try {
           const body = JSON.parse(raw || '{}');
           role = body.role ?? role;
+          // The KIND travels with the message, because it is what the transcript renders from:
+          // `role` says who spoke, the kind says whether it was an answer or a step.
+          kind = String(body.kind ?? '');
           text = String(body.text ?? '');
         } catch {
           return send(400, JSON.stringify({ error: 'bad body' }));
         }
         if (!text) return send(400, JSON.stringify({ error: 'text required' }));
-        return send(200, JSON.stringify(append(id, role, text)));
+        return send(200, JSON.stringify(append(id, role, kind, text)));
       });
       return;
     }

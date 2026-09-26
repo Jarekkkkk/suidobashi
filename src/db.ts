@@ -42,6 +42,16 @@ function migrate(db: Database) {
       id       INTEGER PRIMARY KEY AUTOINCREMENT,
       chat_id  TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
       role     TEXT NOT NULL,
+      -- WHAT THE MESSAGE WAS, not only who said it. The role cannot tell a refusal from an
+      -- extraction — both are pipeline — and the kind is what decides whether a message is an
+      -- answer or a step. Without it, a reloaded transcript lost every bubble: the agent's
+      -- replies came back as progress lines while the user's own prompts survived.
+      --
+      -- NO BACKTICKS IN THIS COMMENT. It lives inside a template literal, so a backtick ends the
+      -- string and the SQL after it becomes JavaScript. The first version of this comment had
+      -- them and the file would not parse — the same trap the original page fell into, which is
+      -- already in NOTES.
+      kind     TEXT,
       text     TEXT NOT NULL,
       at       INTEGER NOT NULL
     );
@@ -59,6 +69,12 @@ function migrate(db: Database) {
   `);
   // Foreign keys are off by default in SQLite, per connection.
   db.run('PRAGMA foreign_keys = ON');
+
+  // The column was added after the table existed. Guarded because a fresh database already has
+  // it from the CREATE above, and SQLite has no `ADD COLUMN IF NOT EXISTS`.
+  try {
+    db.run('ALTER TABLE messages ADD COLUMN kind TEXT');
+  } catch { /* already there */ }
 }
 
 let db: Database | null = null;
@@ -79,6 +95,14 @@ export type Chat = { id: string; title: string; createdAt: number; updatedAt: nu
 export type Message = {
   id: number;
   role: 'user' | 'model' | 'pipeline' | 'chain';
+  /**
+   * What the message WAS — `ask`, `filled`, `extracting`. This is what decides whether it renders
+   * as a bubble or a step, so it is the field that matters; `role` only says who spoke.
+   *
+   * Null for rows written before it was stored. Those render as steps, which is wrong for old
+   * history and right for everything after — no fallback invents a kind it cannot know.
+   */
+  kind: string | null;
   text: string;
   at: number;
 };
@@ -124,7 +148,7 @@ export function deleteChat(id: string) {
 
 export function messages(chatId: string): Message[] {
   return open().query(
-    'SELECT id, role, text, at FROM messages WHERE chat_id = ? ORDER BY at, id',
+    'SELECT id, role, kind, text, at FROM messages WHERE chat_id = ? ORDER BY at, id',
   ).all(chatId) as Message[];
 }
 
@@ -134,15 +158,17 @@ export function messages(chatId: string): Message[] {
  * BOTH, IN ONE PLACE. `updated_at` is what orders the chat list, so a message that did not touch
  * its chat would leave the conversation where it was — and the two writes have to agree.
  */
-export function append(chatId: string, role: Message['role'], text: string): Message {
+export function append(
+  chatId: string, role: Message['role'], kind: string, text: string,
+): Message {
   const db = open();
   const at = Date.now();
   const res = db.run(
-    'INSERT INTO messages (chat_id, role, text, at) VALUES (?, ?, ?, ?)',
-    [chatId, role, text, at],
+    'INSERT INTO messages (chat_id, role, kind, text, at) VALUES (?, ?, ?, ?, ?)',
+    [chatId, role, kind, text, at],
   );
   db.run('UPDATE chats SET updated_at = ? WHERE id = ?', [at, chatId]);
-  return { id: Number(res.lastInsertRowid), role, text, at };
+  return { id: Number(res.lastInsertRowid), role, kind, text, at };
 }
 
 // ── Talents ──────────────────────────────────────────────────────────────────
