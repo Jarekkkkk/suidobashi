@@ -1,27 +1,76 @@
 /*
  * The React entry.
  *
- * Deliberately a SKELETON: it proves React, TypeScript, Tailwind and the three-pane
- * layout build and render, before any of the existing page's logic is ported across.
+ * Ported from src/web/page.js, which stays in the tree until this is confirmed working —
+ * the old UI is the reference to check the port against, and deleting it first would
+ * throw away the only thing that can tell us the port is faithful.
  *
- * Port first, then add — a rewrite that also redesigns is two changes at once, and when
- * it breaks you cannot tell which one did it. So this step adds nothing but the shell,
- * and the port comes next.
- *
- * Nothing here talks to the server yet.
+ * This step moves the wallet connection and the chat loop across. The order form, the
+ * owner actions and the panes' remaining content come next; they are additions to a
+ * working shell rather than part of proving the shell works.
  */
 import { createRoot } from 'react-dom/client';
+import { useState, useEffect } from 'react';
+import { wallet, short } from '@/lib/wallet';
+import { Chat } from '@/components/Chat';
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
 /**
- * The layout, in one place.
+ * The wallet bundle is a separate script and may not have run yet when this app mounts.
  *
- * Three panes, and the widths are a first guess rather than a design: the sidebar is
- * narrow because it lists names, the right pane is wide because it shows terms and a
- * chart. Both collapse when the window is small, since a three-column trading surface on
- * a laptop is the common case and a broken grid is worse than a hidden pane.
+ * Rather than assume script order — which would break the moment either file is loaded
+ * differently — poll briefly for the bridge to appear. Bounded, so a genuinely missing
+ * wallet bundle surfaces as a message instead of a spinner that never resolves.
  */
+function useWalletBridge() {
+  const [ready, setReady] = useState(() => wallet() !== null);
+
+  useEffect(() => {
+    if (ready) return;
+    const started = Date.now();
+    const timer = setInterval(() => {
+      if (wallet() || Date.now() - started > 10_000) {
+        setReady(wallet() !== null);
+        clearInterval(timer);
+      }
+    }, 100);
+    return () => clearInterval(timer);
+  }, [ready]);
+
+  return ready;
+}
+
 function App() {
+  const ready = useWalletBridge();
+  const [address, setAddress] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+
+  // Follow the wallet's own connection state rather than tracking it locally: the user can
+  // disconnect from the extension, and a stale address here would let them try to sign.
+  useEffect(() => {
+    const w = wallet();
+    if (!w) return;
+    setAddress(w.address());
+    return w.onChange(setAddress);
+  }, [ready]);
+
+  async function connect() {
+    const w = wallet();
+    if (!w) return;
+    setNote(null);
+    try {
+      setAddress(await w.connect('slush'));
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function disconnect() {
+    await wallet()?.disconnect();
+    setAddress(null);
+  }
+
   return (
     <div className={cn(
       'grid h-full',
@@ -35,17 +84,31 @@ function App() {
         </p>
       </aside>
 
-      {/* Centre — the chat. The core loop, and the first pane to be built. */}
+      {/* Centre — the chat. */}
       <main className="flex min-w-0 flex-col">
         <header className="flex items-center gap-3 border-b border-white/10 px-4 py-3">
           <span className="font-semibold">sui-tokyo</span>
-          <span className="text-xs text-white/40">shell</span>
+          <div className="ml-auto flex items-center gap-2">
+            {address ? (
+              <>
+                <span className="font-mono text-xs text-white/50">{short(address)}</span>
+                <Button variant="ghost" size="sm" onClick={() => void disconnect()}>
+                  disconnect
+                </Button>
+              </>
+            ) : (
+              <Button size="sm" onClick={() => void connect()} disabled={!ready}>
+                {ready ? 'connect wallet' : 'loading wallet…'}
+              </Button>
+            )}
+          </div>
         </header>
-        <div className="flex-1 overflow-y-auto p-4">
-          <p className="text-sm text-white/50">
-            The chat goes here, driven by the pipeline's events.
-          </p>
-        </div>
+
+        {note && (
+          <p className="border-b border-white/10 px-4 py-2 text-xs text-amber-300/80">{note}</p>
+        )}
+
+        <Chat address={address} />
       </main>
 
       {/* Right — what is about to be signed, and which step of the flow we are at. */}

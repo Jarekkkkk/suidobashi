@@ -102,6 +102,32 @@ function buildAppBundle() {
 }
 
 /**
+ * The React app's shell.
+ *
+ * Served ALONGSIDE the original page, not in place of it. The old UI is the reference the
+ * port is checked against, and it stays until the new one is confirmed working —
+ * deleting it first would throw away the only thing that can tell us the port is faithful.
+ *
+ * The wallet bundle is a separate script because it installs window.agentWallet, which the
+ * app uses. The app also waits for that bridge rather than assuming script order, so
+ * changing this line cannot silently break signing.
+ */
+const APP_PAGE = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sui-tokyo</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body data-token="__TOKEN__">
+<div id="app"></div>
+<script type="module" src="/wallet.js"></script>
+<script type="module" src="/app.js"></script>
+</body>
+</html>`;
+
+/**
  * Build the wallet bundle at startup and hold it in memory.
  *
  * Generated rather than committed: 850 KB of transpiled libraries does not belong
@@ -840,6 +866,10 @@ const server = http.createServer((req, res) => {
     return req.url === '/app.js'
       ? send(200, appBundle.js, 'text/javascript; charset=utf-8')
       : send(200, appBundle.css, 'text/css; charset=utf-8');
+  }
+
+  if (req.method === 'GET' && (req.url === '/app' || req.url === '/app/')) {
+    return send(200, APP_PAGE.replace('__TOKEN__', TOKEN), 'text/html; charset=utf-8');
   }
 
   if (req.method === 'GET' && req.url === '/') {
