@@ -688,7 +688,15 @@ async function main() {
   process.exit(2);
 }
 
-main().catch((e) => {
-  console.error('fatal:', e?.message || e);
-  process.exit(1);
-});
+// THE CLI ENTRY IS GUARDED, AND THAT IS NOT DECORATION.
+//
+// `ui.ts` imports `allowanceMist` from here to show the on-chain allowance, and a bare `main()`
+// therefore ran on THAT import too: the server printed this module's usage line and exited 2
+// before it ever listened. The bare call had been harmless only while nothing imported the file,
+// which is a property of the callers, not of this module — so the guard belongs here.
+if (import.meta.main) {
+  main().catch((e) => {
+    console.error('fatal:', e?.message || e);
+    process.exit(1);
+  });
+}

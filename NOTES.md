@@ -348,6 +348,26 @@ point puts a position into an existing one, so:
 empty position with `ENoLiquidity` — not an error, just fund-before-move. And `exit`
 is terminal for that guard, so anything after it needs a fresh `open`.
 
+**A module that is also a CLI has to guard its entry point.** `agent.ts` ended with a bare
+`main()`, so *importing* it ran the CLI. `ui.ts` imports `allowanceMist` from it to show the
+on-chain allowance, so `bun src/ui.ts` printed the agent's usage line and exited 2 before it
+ever listened. The bare call had been harmless for weeks because nothing imported that file —
+which is a property of the CALLERS, not of the module, so the guard belongs in the module:
+`if (import.meta.main)`. Two things make this one expensive to find:
+
+- the symptom names the wrong program. Starting the server prints `usage: node src/agent.js`,
+  which reads as "agent.ts was run", not as "the server failed to start";
+- **and the already-running server keeps working**, because it holds a bundle built at its own
+  startup. So the failure is invisible until the next restart, and every check you run against
+  the live port passes. Start a fresh process (`UI_PORT=8899 bun src/ui.ts`) — the second
+  instance is what tells you the truth.
+
+**The served CSS and JS are built ONCE, at startup, and held in memory.** `buildAppBundle()` runs
+in the listen path and `appBundle.css` is served from that snapshot, so editing `app.css` and
+reloading the browser shows the OLD theme. The page modules (`page.js`, `markup.js`) are read per
+request and do not have this property — the two behave differently, which is what makes it a
+trap rather than a rule. Restart the server after a style change, or check on a second port.
+
 ***
 
 The CLI scripts under `src/` are **dry-run or `--emit-bytes` only** — there is no
