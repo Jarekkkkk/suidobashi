@@ -278,3 +278,61 @@ authorise trading every guard that accepted it. So (c) trades away "nothing to s
 programmability, and moves the strategy on chain where a bug cannot be fixed by a restart.
 
 Deferred on those grounds, not on effort.
+
+## 8. Shipping (a): the order of transactions
+
+Ship (a) first, and the reason is not that it is the smallest — it is that **one small real order
+exercises every layer at once**, so each layer gets proved before anything is built on top of it.
+(b) and (c) then add no contract surface at all, which is what keeps the wrapper stable while the
+layers above it change.
+
+### What (a) needs, and what it turns out not to need
+
+Built and verified: the guard's 25 public functions (95 move tests), the agent path authorised by a
+capability no caller holds, the band/budget/pause bound, both protocol-native kills, the caller's
+constants and grid arithmetic (21 checks, and the account-creation path simulates on mainnet), the
+runner's decision half (29 checks), and the listing page.
+
+**It does not need `deposit`, `withdraw`, `stop` or `redeem` on the guard.** That is a real finding
+rather than a gap: funding is DeepBook's own owner-gated `deposit`, which works on the shared
+BalanceManager (`the_maker_can_still_withdraw_without_the_guard` already deposits into one), and the
+maker's exit is the owner's `withdraw` with no capability at all. The one thing the maker cannot do
+is cancel the agent's resting orders — and `set_agent` to their own address fixes that, which
+`the_maker_can_take_the_agent_seat_and_unwind` covers. So the capital paths are worth adding, and
+none of them blocks a first live grid.
+
+What IS missing before a grid can run: the publish, the order-path builders (`buy`/`sell`/`cancel`,
+deferred because they would have been dead code), the runner's submission half, and the flow that
+joins them.
+
+And one unknown that must be settled FIRST, not after: **the quantity scale**. Its evidence is in
+NOTES.md and `quantityScale` is marked UNVERIFIED. Transaction 5 below is the one that settles it.
+
+### The sequence
+
+Each transaction proves something the previous one did not, so a failure is attributable to one
+layer rather than to five at once.
+
+| # | Transaction | What it proves |
+|---|---|---|
+| 1 | Publish `deepbook_guard` | The module builds for mainnet; sets `DEEPBOOK_GUARD_PACKAGE` |
+| 2 | Create BalanceManager + 3 caps | The creation path live, not just simulated |
+| 3 | `create` the guard, band and budget set | Capability storage, and the BalanceManager becoming shared |
+| 4 | Deposit a small amount | Funding on a SHARED BalanceManager, owner-gated |
+| 5 | **One `buy`**, quantity chosen to expose the scale | The agent path end to end: the gate, the proof from the guard's own cap, the band, the budget — and the quantity scale, read back from `OrderInfo` and the event |
+| 6 | `cancel` it | Order cancellation, and funds returning to settled |
+| 7 | `withdraw` as owner | The escape hatch, with no capability, on real funds |
+
+Only then are the submission half and the flow worth writing, because only then can either be run
+even once. Transaction 5 should be placed at the documented lot size and, if it is refused, at the
+value the refusal implies — the refusal is the measurement.
+
+### The ask
+
+Publishing is one irreversible transaction of roughly 0.1 SUI plus gas, and it is the only thing
+that unblocks the rest. Everything above it in this plan is already written and checked; everything
+below it has been deliberately not written, because code that cannot be run once is not verified
+code.
+
+Cost to first live grid: the publish, gas for six small transactions, and whatever the test deposit
+is — a few SUI, recoverable in transaction 7.
