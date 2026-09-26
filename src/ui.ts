@@ -1518,29 +1518,54 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET' && !id) {
       return send(200, JSON.stringify({ talents: listTalents() }));
     }
-    if (req.method === 'POST' && id) {
-      // INSTALLING IS OFF-CHAIN: it stores what the talent exposes so the local model can be
-      // equipped with it. A talent that spends ALSO needs an on-chain grant, and that is a
-      // separate act with its own signature — one is a download, the other is a permission.
+
+    if (req.method === 'POST' && !id) {
+      // INSTALLING FETCHES THE MANIFEST HERE, not in the browser.
+      //
+      // An MCP server will not send CORS headers — it is not a website — so a browser fetch of
+      // /metadata fails on a cross-origin request. And the server is the side that actually talks
+      // MCP, so it is the side that should hold the description of what it can do.
       let raw = '';
-      req.on('data', (c) => { raw += c; if (raw.length > 65536) req.destroy(); });
-      req.on('end', () => {
-        let name = id, manifest: unknown = {}, prompt: string | null = null;
+      req.on('data', (c) => { raw += c; if (raw.length > 8192) req.destroy(); });
+      req.on('end', async () => {
+        let url = '';
         try {
-          const body = JSON.parse(raw || '{}');
-          if (typeof body.name === 'string') name = body.name;
-          if (body.manifest) manifest = body.manifest;
-          if (typeof body.prompt === 'string') prompt = body.prompt;
+          ({ url } = JSON.parse(raw || '{}'));
         } catch {
           return send(400, JSON.stringify({ error: 'bad body' }));
         }
-        installTalent(id, name, manifest, prompt);
-        return send(200, JSON.stringify({ ok: true, id }));
+        url = String(url || '').trim().replace(/\/+$/, '');
+        if (!/^https?:\/\/[^\s]+$/.test(url)) {
+          return send(400, JSON.stringify({ error: 'url must be an http(s) address' }));
+        }
+
+        try {
+          const r = await fetch(`${url}/metadata`, { signal: AbortSignal.timeout(8000) });
+          if (!r.ok) {
+            return send(200, JSON.stringify({
+              ok: false, why: `${url}/metadata answered ${r.status}`,
+            }));
+          }
+          const manifest: any = await r.json();
+          // The name comes from the manifest, so a talent says what it is rather than being
+          // labelled by whoever installed it. The URL is the id: it is unique, and it is what
+          // the server would have to reach anyway.
+          const name = String(manifest?.strategy?.id || manifest?.name || url);
+          installTalent(url, name, manifest, null);
+          return send(200, JSON.stringify({ ok: true, id: url, name }));
+        } catch (e) {
+          // A talent that cannot be reached is not an error on our side, so it reads as one
+          // sentence rather than a stack.
+          return send(200, JSON.stringify({
+            ok: false, why: `could not reach ${url}: ${errText(e)}`,
+          }));
+        }
       });
       return;
     }
+
     if (req.method === 'DELETE' && id) {
-      uninstallTalent(id);
+      uninstallTalent(decodeURIComponent(id));
       return send(200, JSON.stringify({ ok: true }));
     }
   }

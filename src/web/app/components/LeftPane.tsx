@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { ActionForm } from '@/components/ActionForm';
 import { ChatsPane } from '@/components/ChatsPane';
+import { TalentsPane } from '@/components/TalentsPane';
 
 /*
  * The left pane: what is installed, and what is left over.
@@ -275,27 +276,23 @@ export function LeftPane({
         )}
 
         {tab === 'talents' && (
-          <div className="flex flex-col gap-3 p-3">
-            {/*
-              WHAT THIS TAB SHOWS, and the distinction is worth stating rather than implying.
+          <div className="flex h-full flex-col">
+            {/* What the model can DO. */}
+            <TalentsPane />
 
-              A TALENT is a capability — the swap server is one. A GRANT is the on-chain
-              permission a talent needs in order to spend. They are different things, and this
-              list is the second: a talent that only reads needs no grant at all, which is why
-              the query talent you described will not appear here.
-
-              Calling these rows "talents" would be the same mistake as calling them "hires" —
-              a name that describes something else and leaves the user to work out what.
-            */}
-            <div>
-              <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                grants
+            {/* What those capabilities are PERMITTED. Two things, in one tab, in this order:
+                a grant without a talent is a permission to do nothing, and the distinction is
+                the reason neither is called "hire" any more. */}
+            <div className="flex flex-col gap-3 border-t border-border p-3">
+              <div>
+                <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                  grants
+                </div>
+                <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground/60">
+                  On-chain permissions. A talent that spends needs one; a talent that only reads
+                  does not.
+                </p>
               </div>
-              <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground/60">
-                On-chain permissions. A talent that spends needs one; a talent that only reads
-                does not.
-              </p>
-            </div>
 
             <ul className="flex flex-col gap-2">
             {(hires ?? []).map((h) => (
@@ -355,6 +352,7 @@ export function LeftPane({
               <li className="px-1 text-[12px] text-muted-foreground">reading…</li>
             )}
             </ul>
+            </div>
           </div>
         )}
 
