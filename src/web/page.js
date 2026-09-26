@@ -271,7 +271,9 @@ async function ownerAction(kind, body) {
     if (kind === 'order') {
       say('order created — asking the mcp server to fill it…', 'warn');
       const f = await api('/api/fill', { digest: out.digest });
-      const which = f.orderId ? `order ${f.orderId.slice(0, 10)}… ` : '';
+      // The FULL id, not a prefix: when something goes wrong with an order this is the
+      // only handle anyone has, and a truncated one cannot be looked up.
+      const which = f.orderId ? `order ${f.orderId} ` : '';
       return say(
         f.filled
           ? `filled — ${f.digest} · fee ${f.fee} to the filler · ${which}`
@@ -310,10 +312,20 @@ $('ordMake').onclick = () => {
   const amountMist = suiToMist($('ordAmt').value);
   if (!amountMist) return say('enter SUI as a plain decimal, e.g. 0.01', 'bad');
   const minOutUsdc = usdcToUnits($('ordMin').value);
-  if (!minOutUsdc) return say('enter USDC as a plain decimal, e.g. 0.005', 'bad');
-  // The fee is what the filler collects, and the floor is what YOU receive — so the
-  // fee sits on top of the floor rather than coming out of it.
-  const feeOutUsdc = usdcToUnits($('ordFee').value) ?? '0';
+  if (!minOutUsdc) return say('enter the floor as a plain decimal, e.g. 0.005', 'bad');
+  // Refused rather than defaulted, exactly like the floor above. The first version
+  // wrote `?? '0'`, so a cleared or unparseable fee field silently became ZERO — and a
+  // zero fee is a real, different order that the server then declines. Two adjacent
+  // inputs of the same type behaved oppositely, and the quiet one produced an outcome
+  // nobody could explain from the screen.
+  //
+  // `0` typed deliberately still works: `usdcToUnits('0')` is '0', not null.
+  const feeOutUsdc = usdcToUnits($('ordFee').value);
+  if (feeOutUsdc === null) {
+    return say('enter the fee as a plain decimal, e.g. 0.005 — or 0 for none', 'bad');
+  }
+  // The fee is what the filler collects and the floor is what YOU receive, so the fee
+  // sits on top of the floor rather than coming out of it.
   return ownerAction('order', { amountMist, minOutUsdc, feeOutUsdc });
 };
 
