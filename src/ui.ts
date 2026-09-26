@@ -23,6 +23,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { VAULT_ID, DEPLOYER, USDC_TYPE, REWARD_TYPE, PACKAGE_LATEST_ID, POOL_TICK_SPACING, GUARD_ID, GUARD_SHARED_VERSION, SLIPPAGE_BPS } from './addresses.js';
 import { HIRES } from './hires.js';
+import { BUILT_IN_TALENTS } from './talents.js';
 import { findCreatedGuard, repointAddresses } from './guard-id.js';
 import { event, endingFor, type EventKind } from './web/events.js';
 import {
@@ -1516,7 +1517,10 @@ const server = http.createServer((req, res) => {
     const id = parts[2];
 
     if (req.method === 'GET' && !id) {
-      return send(200, JSON.stringify({ talents: listTalents() }));
+      // BOTH KINDS, and the distinction is carried in the data rather than implied by the
+      // order: a built-in is always available, an MCP one is only as good as the address it
+      // came from. The tab labels them from this field.
+      return send(200, JSON.stringify({ talents: listTalents(), builtIn: BUILT_IN_TALENTS }));
     }
 
     if (req.method === 'POST' && !id) {

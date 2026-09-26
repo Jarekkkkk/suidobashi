@@ -31,6 +31,7 @@
  */
 import 'dotenv/config';
 import { HIRES, HIRE_NAMES, DEFAULT_HIRE, type Hire, type HireName } from './hires.js';
+import { ACTION_IDS } from './talents.js';
 
 const QVAC_URL = process.env.QVAC_URL || 'http://127.0.0.1:11434/v1/chat/completions';
 const MODEL = process.env.QVAC_MODEL || 'intent';
@@ -64,7 +65,7 @@ from and to are the coin symbols, or "" when the request has no direction.
 agent is which hired agent to use, or "" for the default. Available: ${HIRE_NAMES.join(', ')}.
 If no amount is given, use "".
 Use action "unknown" when the request is not one of the listed actions.
-Valid actions: swap, deposit_liquidity, rebalance, redeem, status. /no_think`;
+Valid actions: ${ACTION_IDS.join(', ')}. /no_think`;
 
 /** Load-bearing: these are what make a 0.6B model extract reliably. */
 const EXAMPLES = [
