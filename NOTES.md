@@ -9,7 +9,7 @@ for caps, a purpose gate for venue control. No delegation, no TEE.
 | --- | --- |
 | Package (original id) | `0x2441fb74d7684f43019fdabf27d6de24dc8e42826ddd86ba07bc21aded80c014` |
 | Package (version 2 id) | `0xbaf5205c0e5b8aeea6117a31e9b5e47af73e220ed58f32c2256f0e708cb2db9f` |
-| Package (latest, v3) | `0x0517705e1bd75f18c586b9a243a2608bda489420ca9d2308adbe2199fab999d7` |
+| Package (latest, v9) | `0xe420d1be090d84763b55ee6051cee1c346888d7ec8107af41e9172cc9ef8b864` |
 | UpgradeCap | `0x50a57fce03614745395e2a9e1aac204cfd0f7979532106669066283898b97ec9` |
 | Vault (shared v1) | `0x153bb450c5bbb06c4587f95eec2b14f81cd6163792d43b59175a6df6504c2d42` |
 | Policy (shared v963323800) | `0x8a68c6ebb9aab5ef378c51172a88b23c3cad51ec62b8b7c96ab847a5f9f820c0` |
@@ -25,6 +25,14 @@ the budget is authority, and they are not the same number.
 
 ### Proven on mainnet, by real transactions
 
+- `deepbook_guard` is live, in the v9 upgrade: `EtxVz7BBjKC4qVJqnbTp9LqCm16heCB1UfExsm41VZHM`
+  — package `0xe420d1be…`, version 9, 0.1996 SUI. The published module list is
+  `deepbook_guard, order, policy, position_guard, spend_vault`, and that list is itself the
+  evidence for the thing most worth checking before an upgrade: the DeepBook dependency LINKED
+  rather than BUNDLED. A bundled dep would have put its own `pool` and `balance_manager` in that
+  list, at which point our `BalanceManager` would be a different type from the real one and no
+  guard could ever act on an account. The compiled bytecode was read first — it referenced
+  DeepBook's original id `0x2c8d603b…`, not `0x0`.
 - Swap through the purpose gate: `JAPdriQcvgVWQj7gY72AKUbi2uDQeU6t6Yix9HcxK5PM`
   (`amount_paid` exactly equals `amount_in`; output routed to the owner as a Coin)
 - Over-budget draw refused on-chain: `5PscKjYZDb8Wmjno19iEs2cEAJ8ZDnLx8muC2HJS1QqW`

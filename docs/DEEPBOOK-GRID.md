@@ -219,8 +219,19 @@ deployed version). See NOTES.md for both failures.
 
 ## 6. Cost and open items
 
-Publish is a Move upgrade-free new module → ~0.1 SUI, irreversible, needs your explicit go-ahead.
-Then one BM-creation tx (owner = your address, mints the three caps) and a small live grid.
+**Done, 2026-02:** the module went live in the v9 upgrade,
+`EtxVz7BBjKC4qVJqnbTp9LqCm16heCB1UfExsm41VZHM` — package `0xe420d1be…`, version 9. It is an
+**upgrade**, not a publish: the package was already deployed, and adding a module to a published
+package means upgrading it under the UpgradeCap (policy `compatible`, which permits exactly this).
+Cost was **0.1996 SUI**, twice the 0.1 this section originally estimated.
+
+The check that mattered before spending it: whether the git-pinned DeepBook dependency would LINK
+or BUNDLE. `Move.lock` pins every dependency by source only, and DeepBook's own manifest declares
+`[addresses] deepbook = "0x0"` — the same condition that made the first publish bundle
+`spend_vault`. Bundling would have put DeepBook's `pool` and `balance_manager` inside our package,
+making our `BalanceManager` a different type from the real one. Reading the compiled bytecode
+settled it beforehand: `deepbook_guard.mv` referenced DeepBook's original id `0x2c8d603b…`, not
+`0x0`. The published module list confirms it after the fact — five modules, ours only.
 
 Not yet verified, stated as unverified: whether several `place_limit_order` commands may take `&mut`
 on the same Pool/wrapper within **one PTB** (DeepBook's SDK batches orders, this repo has not tried
@@ -355,12 +366,13 @@ Only then are the submission half and the flow worth writing, because only then 
 even once. Transaction 5 should be placed at the documented lot size and, if it is refused, at the
 value the refusal implies — the refusal is the measurement.
 
-### The ask
+### The ask — answered
 
-Publishing is one irreversible transaction of roughly 0.1 SUI plus gas, and it is the only thing
-that unblocks the rest. Everything above it in this plan is already written and checked; everything
-below it has been deliberately not written, because code that cannot be run once is not verified
-code.
+Publishing was one irreversible transaction and it is done: the module is live, and the id is in
+`addresses.ts` as `DEEPBOOK_GUARD_PACKAGE`. Everything above that line in this plan — the wrapper,
+the arithmetic, the runner's decision half, the listing — was written and checked before spending
+it. Everything below it is now merely unwritten rather than unverifiable, which is the whole
+reason for that order.
 
-Cost to first live grid: the publish, gas for six small transactions, and whatever the test deposit
-is — a few SUI, recoverable in transaction 7.
+Next: transactions 2–7, then the submission half and the flow. Transaction 5 still settles the
+quantity scale, and is still the one that matters.

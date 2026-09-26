@@ -26,12 +26,14 @@
  *   v5  0x9167a804…  added `order` — escrowed swaps with a maker-committed minimum
  *   v6  0x70b9289c…  a settled order survives, so its storage can be reclaimed
  *   v7  0xec81877e…  a maker can declare a fee for a fill
+ *   v8  0x4529c549…  the allowance bound
+ *   v9  0xe420d1be…  added `deepbook_guard` — bounded DeepBook v3 order access
  *
  * Object types keep their original-id identity across upgrades, so an OwnerCap
  * minted before any of this still matches the newest code.
  */
 export const PACKAGE_LATEST_ID =
-  '0x4529c5490947c2c13997fabe78dfcc38f8645da3582713891eb1620eac4d0632';
+  '0xe420d1be090d84763b55ee6051cee1c346888d7ec8107af41e9172cc9ef8b864';
 
 /**
  * The UpgradeCap, for running an upgrade from the CLI. Not referenced by any code
@@ -276,11 +278,14 @@ export const DEPLOYER =
   '0x0b3fc768f8bb3c772321e3e7781cac4a45585b4bc64043686beb634d65341798';
 
 /**
- * The `deepbook_guard` package, once it is published.
+ * The `deepbook_guard` module, once published — which is now.
  *
- * Null deliberately. A package id that is plausible but wrong is worse than an absent one: the
- * failure would be an abort on a transaction the maker has already signed. Everything that would
- * call it reads this first and reports that the module is unpublished rather than guessing at an
- * address. The publish sets it, the way `guard-id.ts` adopts a deployed guard.
+ * It is not a package of its own: the guard lives in THIS package, added by the v9 upgrade, so its
+ * address is the package's latest id. Defined in terms of that rather than as a second literal,
+ * because two literals for one id is how a stale reference gets in — and a stale package id here
+ * would be a call that aborts on a transaction the maker had already signed.
+ *
+ * Anything that would call it reads this; while it was null, the listing served a `blocked` reason
+ * instead of offering an action that could not work.
  */
-export const DEEPBOOK_GUARD_PACKAGE: string | null = null;
+export const DEEPBOOK_GUARD_PACKAGE: string | null = PACKAGE_LATEST_ID;

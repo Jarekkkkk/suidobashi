@@ -1602,17 +1602,18 @@ const server = http.createServer((req, res) => {
 
   // The listing for flavor (b): what a maker can point a guard at, and whether they can yet.
   //
-  // Whether the guard module is published is served as DATA rather than hard-coded in the pane.
-  // The moment the publish sets that id, the page starts offering the action with no UI change —
-  // and until then it says why not, so a maker sees an absent button with a reason rather than a
-  // button that fails when pressed.
+  // `blocked` is DATA, not a message the pane decides on. It names the reason the opt-in action is
+  // not offered, whatever that reason currently is: the module unpublished, or published and the
+  // flow that would create a guard not built yet. The module went live in v9, so the first reason
+  // is history and the second is the live one — and the pane needed no change for either, which is
+  // the point of serving it.
   if (req.method === 'GET' && req.url === '/api/strategies') {
     return send(200, JSON.stringify({
       strategies: STRATEGIES,
       guardPackageId: DEEPBOOK_GUARD_PACKAGE,
       blocked: DEEPBOOK_GUARD_PACKAGE === null
         ? 'the guard module is not published yet, so there is no guard to point at an operator'
-        : null,
+        : 'the guard module is live; the flow that creates one from here is not built yet',
     }));
   }
 
