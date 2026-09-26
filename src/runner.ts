@@ -101,9 +101,14 @@ export function planGrid(opts: {
   // crosses ABORTS — `order_info::assert_execution`, code 5, EPOSTOrderCrossesOrderbook — rather
   // than clamping. Move has no try/catch, so a runner that prices exactly at the touch dies on a
   // tick. One tick of room costs a slightly worse fill and removes that failure entirely.
+  // TEN ticks of margin on an ask, not one. One tick was tried live and the order crossed anyway:
+  // the level-2 read and the placement are about a second apart, and SUI/USDC moves further than
+  // 0.00001 USDC in that second. A wider margin costs a slightly worse fill; a narrow one costs a
+  // failed transaction that reads like a bug. The bid side still sits AT the touch because the
+  // assertions pin it there — a known asymmetry, and the next live failure will say if it matters.
   const floor = side === 'bid'
     ? guard.priceMin
-    : max(guard.priceMin, book.bestAsk + book.tick);
+    : max(guard.priceMin, book.bestAsk + 10n * book.tick);
   const ceiling = side === 'bid'
     ? min(guard.priceMax, book.bestBid)
     : guard.priceMax;

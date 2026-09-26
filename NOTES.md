@@ -734,6 +734,18 @@ in a programmable transaction at all: the simulator refuses it with
 whether one specific order id exists. A script that decodes the `Order` structs itself can, which is
 the path not yet taken.
 
+**One capability, three entry points, one implementation — by shelling out.** The grid runner is a CLI
+a person runs, a talent route an agent calls, and a row the clock fires. Neither of the last two
+imports the runner's logic; both SHELL OUT to it, which is why no shared module was needed. There is
+one implementation because there is only one implementation. An `import` was the other way to avoid
+divergence and it was more code — worth remembering before extracting anything.
+
+**A one-tick margin is smaller than a live market moves.** A POST_ONLY ask priced one tick above the
+best ask crossed anyway between the level-2 read and the build a second later, aborting
+`EPOSTOrderCrossesOrderbook` (code 5). Ten ticks holds. That failure looks exactly like a bug in the
+runner and is really the market being faster than its reader — so the margin is a market property,
+not a constant, and the number in the code is a measurement rather than a preference.
+
 ## Mainnet feature flags (protocol 136, read from the node)
 
 ```text
