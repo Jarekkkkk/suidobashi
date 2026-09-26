@@ -351,6 +351,43 @@ it: passing the flag prints a message explaining that signing no longer happens
 there. Keep it — an old command in someone's shell history should fail loudly rather
 than quietly do something else.
 
+**An object cannot be rebuilt from a destructured UID.** The first version of `settle`
+destructured the `Order`, swapped, and reassembled it with the same UID. The compiler
+refused: *"The UID must come directly from `sui::object::new`, or
+`sui::derived_object::claim`"*. So the struct has to stay **intact** and the funds come
+out with `funds.split(funds.value())`, which leaves the original balance at zero.
+
+**A shared object needs an explicit `sharedObjectRef` for an offline build.**
+`tx.object(id)` requires *resolution*, which is exactly what an offline build cannot do —
+it fails with *"transaction data was not sufficient to build offline"*. Read the initial
+shared version and reference it explicitly. That also removes a lookup from the normal
+path.
+
+**A failed transaction comes back under `FailedTransaction`, not `Transaction`.** Reading
+only the success shape reported `digest: null` for precisely the failures the
+`--no-simulate` mode exists to produce. Cost one paid transaction to discover, because
+the shape was guessed instead of dumped.
+
+**A dynamic field is not in the object's `json`.** Anything stored in one is invisible to
+a read of the object's own fields. This produced a real bug: the MCP server read
+`order.fee_out`, found nothing, and `?? 0` reported every order as zero-fee while they
+carried 5000 on chain.
+
+**A struct with `key` needs `phantom` on its type parameters.** `key` normally requires
+every type argument to have `store`; `phantom` is what exempts it. Without the annotation
+`Order<SUI>` does not compile — and `CoinType` is only used inside `Balance<phantom T>`, so
+`phantom` is the accurate description rather than a workaround.
+
+**`toMist(undefined)` returns `0n`, so `??` does not apply.** A missing value silently
+became a ZERO-LENGTH order that `create` refused as already expired, and the error pointed
+at the chain rather than at the default that never applied. `??` catches `null` and
+`undefined`, not a parse function's own zero.
+
+**A zero fee is stored as absence, deliberately.** `create_with_fee` adds nothing for a
+zero fee, so "no fee" has exactly one representation rather than two. Absence genuinely
+means zero here — but only once the lookup is known to be right, which is a separate
+question and the one that was wrong.
+
 ## Mainnet feature flags (protocol 136, read from the node)
 
 ```text
