@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { api } from '@/lib/api';
+import { api, type Event } from '@/lib/api';
 import { signAndSubmit, type Say, type OnTerms } from '@/lib/flow';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -47,7 +47,7 @@ function countdown(expiresAtMs: string): number | null {
   return left > 0 ? Math.ceil(left / 1000) : null;
 }
 
-export function LeftPane({ say, onTerms }: { say: Say; onTerms: OnTerms }) {
+export function LeftPane({ events, say, onTerms }: { events: Event[]; say: Say; onTerms: OnTerms }) {
   const [tab, setTab] = useState<'agents' | 'outstanding'>('agents');
   const [out, setOut] = useState<Outstanding | null>(null);
   const [hires, setHires] = useState<Hire[] | null>(null);
@@ -68,6 +68,19 @@ export function LeftPane({ say, onTerms }: { say: Say; onTerms: OnTerms }) {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+
+  // RELOAD WHEN A FLOW ENDS, not on every event. A reload is a multi-second chain scan, so
+  // firing it per event would run dozens per swap; a terminal event is the signal that
+  // on-chain state may have changed, and it is the same signal the signing pane uses to know
+  // the flow is over.
+  //
+  // Without this the pane was a snapshot taken at page load, so an order created afterwards
+  // was invisible until the user thought to press refresh — which is not a feature, it is a
+  // chore. Found by the user reporting a missing row while the endpoint was correct all along.
+  const terminalCount = events.reduce((n, e) => n + (e.terminal ? 1 : 0), 0);
+  useEffect(() => {
+    if (terminalCount > 0) void load();
+  }, [terminalCount, load]);
 
   /** Act on one row. The same three steps the chat uses, so the property is identical. */
   async function act(order: Order) {

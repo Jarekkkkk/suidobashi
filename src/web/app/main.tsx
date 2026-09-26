@@ -88,7 +88,7 @@ function App() {
     )}>
       {/* Left — what is installed, and what is left over. */}
       <aside className="hidden overflow-hidden border-r border-white/10 md:block">
-        <LeftPane say={say} onTerms={setTerms} />
+        <LeftPane events={events} say={say} onTerms={setTerms} />
       </aside>
 
       {/* Centre — the chat. */}

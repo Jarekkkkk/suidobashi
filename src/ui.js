@@ -732,7 +732,23 @@ async function outstandingOrders() {
   });
   const maker = process.env.SUI_SENDER || DEPLOYER;
 
-  const list = await client.listTransactions({ filter: { sender: maker }, limit: SCAN });
+  // ORDER MATTERS, AND THE OBVIOUS SPELLING IS SILENTLY IGNORED.
+  //
+  // `order: 'descending'` returns the newest transactions first. `descending: true` — the
+  // name that reads as correct — is accepted, does not error, and returns the OLDEST. That
+  // is how this shipped broken: the scan dutifully read fifteen ancient transactions and
+  // never reached anything recent, so an order created a minute earlier was invisible while
+  // the call looked perfectly healthy.
+  //
+  // This is the THIRD silently-ignored option in this project, after listEvents' filters and
+  // the aggregator's provider string. The pattern is consistent enough to state: an option is
+  // not verified by the call succeeding. It is verified by checking that the OUTPUT changed
+  // in the direction asked for.
+  const list = await client.listTransactions({
+    filter: { sender: maker },
+    limit: SCAN,
+    order: 'descending',
+  });
   const digests = (list.transactions ?? []).map((t) => (t.Transaction ?? t).digest).filter(Boolean);
 
   // The created ids from each transaction. Sequential rather than parallel: this is a chain

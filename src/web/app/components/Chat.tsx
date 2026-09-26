@@ -133,11 +133,18 @@ export function Chat({
           data: { orderId: f.orderId, digest: f.digest },
         });
       } else {
+        // NOT filled. Named as the routine outcome it is, and it says where to act on it:
+        // the outstanding tab in the left pane, which is exactly what that tab is for.
+        //
+        // "Refund" was the old word for this and it was misleading — it read as paying
+        // someone out when it is taking your own escrow back. The action is called `revoke`
+        // everywhere else, and two names for one thing in adjacent panes is the kind of drift
+        // that makes a UI feel unreliable.
         say({
           kind: 'unfilled',
           source: 'chain',
-          text: `not filled: ${f.why ?? 'no reason given'}. It expires shortly, and anyone `
-            + 'may refund it to you.',
+          text: `not filled: ${f.why ?? 'no reason given'}. It expires shortly — the `
+            + 'outstanding tab will offer to revoke it and return your escrow.',
           terminal: true,
           data: { orderId: f.orderId },
         });
