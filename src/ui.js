@@ -1072,6 +1072,27 @@ const PAGE = `<!doctype html>
 <script type="module" src="/wallet.js"></script>
 <script type="module" src="/page.js"></script>`;
 
+// A THROW IN A REQUEST HANDLER MUST NOT KILL THE SERVER.
+//
+// This server died exactly that way: a new route emitted an event kind that was not in the
+// closed vocabulary, `event()` threw — correctly, a typo should fail loudly — and because the
+// throw happened inside a request handler it took the whole process down. The browser saw
+// only `ERR_CONNECTION_REFUSED`, which points at the network and says nothing about the cause.
+//
+// The closed vocabulary stays. What changes is that "fail loudly" now means a logged error
+// and a served response, not a dead server: a typo should cost one request, not the session.
+//
+// Loud, not silent: both handlers name the error and its first frames, because a crash that
+// leaves no trace is how this one hid.
+const complain = (label, err) => {
+  const e = err instanceof Error ? err : new Error(String(err));
+  console.error(`\n!! ${label}: ${e.message}`);
+  console.error((e.stack ?? '').split('\n').slice(1, 4).join('\n'));
+  console.error('!! the server is still running; the request that caused this was not answered\n');
+};
+process.on('uncaughtException', (e) => complain('uncaught exception', e));
+process.on('unhandledRejection', (e) => complain('unhandled rejection', e));
+
 const server = http.createServer((req, res) => {
   const send = (code, body, type = 'application/json') => {
     res.writeHead(code, { 'Content-Type': type });

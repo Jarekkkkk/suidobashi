@@ -32,6 +32,7 @@ export const EVENT_KINDS = [
   'filling',             // the filler is working
   'filled',              // settled, and the output has arrived
   'expired',             // the window closed with nobody taking it
+  'revoking',            // the server is taking the escrow back
   'revoked',             // the escrow is back with the maker
 ];
 

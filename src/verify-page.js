@@ -180,6 +180,25 @@ for (const k of TERMINAL_KINDS) {
   check(`ending ${k} is not worded as a failure`, !ERROR_WORDS.test(w), `"${w}"`);
 }
 
+// EVERY KIND THE SERVER EMITS MUST BE IN THE CLOSED SET.
+//
+// This is the check that was missing when a new route emitted `revoking`, which was not in
+// EVENT_KINDS. `event()` threw — correctly, a typo should fail loudly — but the throw happened
+// inside a request handler, so it killed the whole server. The browser saw only
+// ERR_CONNECTION_REFUSED, which points at the network and says nothing about the cause.
+//
+// The vocabulary being closed is the point, so the check is that the CODE agrees with it.
+// Read from the source rather than from a hand-kept list, because a list would be one more
+// thing to keep in step — and the failure mode here is precisely a list that got out of step.
+const serverSrc = fs.readFileSync(new URL('./ui.js', import.meta.url), 'utf-8');
+const emitted = [...serverSrc.matchAll(/\bevent\(\s*'([a-z-]+)'/g)].map((m) => m[1]);
+check('the server emits at least one event kind', emitted.length > 0,
+  `found ${emitted.length} — the regex may have stopped matching`);
+for (const k of new Set(emitted)) {
+  check(`server-emitted kind "${k}" is in the vocabulary`, EVENT_KINDS.includes(k),
+    'a kind outside EVENT_KINDS throws inside a request handler');
+}
+
 if (failures) {
   console.error(`\n${failures} check(s) failed.`);
   process.exit(1);
