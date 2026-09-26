@@ -711,6 +711,15 @@ and executes — the abort it reports is DeepBook's balance check, one frame in,
 the transaction's shape. A PTB that repeats a shared mutable argument is fine; check the shape by
 submitting one and reading which command failed, rather than by reasoning about borrow rules.
 
+**A public function that returns a REFERENCE cannot be a PTB command result.** DeepBook's
+`order_query::iter_orders` returns an `OrderPage`, and `order_query::orders(&page)` returns
+`&vector<Order>` — so the natural read, "how many orders sit in this id range", cannot be expressed
+in a programmable transaction at all: the simulator refuses it with
+`InvalidPublicFunctionReturnType { idx: 0 }`. The page's `orders` field is private and
+`has_next_page` answers a different question, so from a PTB alone there is no way to ask the book
+whether one specific order id exists. A script that decodes the `Order` structs itself can, which is
+the path not yet taken.
+
 ## Mainnet feature flags (protocol 136, read from the node)
 
 ```text
