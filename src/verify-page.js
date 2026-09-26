@@ -361,9 +361,22 @@ for (const token of ['--background', '--foreground', '--sidebar', '--card', '--b
   // FAIL on correct code, which is the same class of mistake as the substring check earlier.
   const fn = ui;
 
-  check('the hires route reads the OZ allowance from the chain',
-    fn.includes('spend_vault::allowance'),
-    'no allowance read — the budget is a registry constant again');
+  // ONE READER, and it lives in agent.ts.
+  //
+  // The check used to look for `spend_vault::allowance` inside ui.ts, which was where the read
+  // first lived. Moving it so the GATE could use it too made that check fail on correct code —
+  // the fourth time a check has described a shape rather than an invariant. What matters is that
+  // there is exactly one reader and both callers use it, so that is what this asserts.
+  const agentSrc = fs.readFileSync('src/agent.ts', 'utf8');
+  check('the allowance is read by exactly one function, in agent.ts',
+    agentSrc.includes('export async function allowanceMist') && agentSrc.includes('spend_vault::allowance'),
+    'the ledger reader moved or disappeared — the gate and the hires route both depend on it');
+  check('the hires route uses that reader rather than its own copy',
+    fn.includes("import { allowanceMist } from './agent.js'") && fn.includes('allowanceMist(h.capId)'),
+    'a second copy of the read — two readers of one ledger will drift');
+  check('the gate reads the allowance too',
+    agentSrc.includes('await allowanceMist(hire.capId)'),
+    'the gate does not read it, so an over-grant request would only fail on chain, as an abort');
   check('the ledger value overwrites the registry figure',
     /row\.budgetSui = \(Number\(mist\) \/ 1e9\)/.test(fn),
     'the chain figure is read but not used for budgetSui');

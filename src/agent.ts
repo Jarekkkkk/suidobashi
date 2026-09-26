@@ -243,8 +243,8 @@ function selectHire(text: string) {
 function validate(
 intent: any,
 amountMist: bigint | null,
-{ walletSuiMist, text, hire, policy, actions }: {
-walletSuiMist: bigint; text: string; hire: Hire | null; policy: any;
+{ walletSuiMist, allowance, text, hire, policy, actions }: {
+walletSuiMist: bigint; allowance: bigint | null; text: string; hire: Hire | null; policy: any;
 /** What the installed talents make available, checked below. */
 actions: string[];
 },
@@ -345,8 +345,28 @@ actions: string[];
   if (amountMist > 0n && amountMist > walletSuiMist) {
     return {
       ok: false,
-      reason: `amount ${amountMist} exceeds your wallet balance ${walletSuiMist} — `
+      // SUI, not mist. The refusal is read by a person who typed "0.05", and 50000000 is not an
+      // amount they have ever seen. The chain's own abort says "amount exceeds the maker's
+      // remaining allowance" and nothing else, which is why this check exists at all.
+      reason: `${suiText(amountMist)} SUI exceeds your wallet balance ${suiText(walletSuiMist)} — `
         + 'the escrow would have nothing to draw from',
+    };
+  }
+  // The grant, checked HERE rather than only on chain.
+  //
+  // create_with_policy enforces this for real, but it enforces it by aborting, and an abort
+  // reaches the user as "Transaction resolution failed: MoveAbort in 4th command,
+  // 'EExceedsAllowance' ... in 0x4529c549::order::create_with_policy (line 222)" — four pieces of
+  // implementation detail and not one number. This is the same fact said in the user's terms,
+  // before a signature is requested.
+  //
+  // `allowance === null` means the read failed, so the check stands aside and lets the chain be
+  // the authority. It is the authority regardless: this is a courtesy, not the boundary.
+  if (amountMist > 0n && allowance !== null && amountMist > allowance) {
+    return {
+      ok: false,
+      reason: `${suiText(amountMist)} SUI is more than the ${suiText(allowance)} SUI your grant `
+        + 'allows — raise the budget in the policy sheet, or ask for less',
     };
   }
   if ((intent.action === 'swap' || intent.action === 'deposit_liquidity') && amountMist <= 0n) {
@@ -459,6 +479,78 @@ async function walletBalanceMist() {
   return BigInt(b.balance?.balance ?? 0);
 }
 
+/**
+ * The maker's remaining allowance, read from the OpenZeppelin ledger.
+ *
+ * The budget is NOT a policy field, so `getObject` cannot see it: it lives in a
+ * `LinkedTable<BudgetKey, Allowance>` on the vault, keyed by `(cap_id, coin_type)`, and a table's
+ * contents are not in the object's JSON. Nor is it a dynamic field, so `getDynamicField` cannot
+ * reach it either.
+ *
+ * What works is calling the module's own view through a simulation — `simulateTransaction` with
+ * `include: { commandResults: true }` returns each command's return values, and
+ * `spend_vault::allowance<T>(vault, cap_id)` is a plain public view. The JSON-RPC client's
+ * `devInspectTransactionBlock` would be the obvious route and is gone: public fullnodes answer
+ * "JSON-RPC has been deprecated".
+ *
+ * Returns null on failure, NEVER 0. Zero means "this grant covers nothing", which is a real and
+ * alarming claim; null means "could not read", which must not be mistaken for it.
+ *
+ * Exported because the build path needs the same figure. There is one reader of this ledger.
+ */
+export async function allowanceMist(capId: string): Promise<bigint | null> {
+  // A fixed allowance, for the acceptance check ONLY — the same reasoning as the balance
+  // override above. The chain enforces the real bound, so overriding it here can only make the
+  // server's ADVICE wrong, never lose funds; and without it the check's cases depend on whatever
+  // the budget happens to be, which is a check people learn to ignore.
+  const override = process.env.AGENT_ALLOWANCE_MIST;
+  if (override !== undefined) return BigInt(override);
+
+  try {
+    const { SuiGrpcClient } = await import('@mysten/sui/grpc');
+    const { Transaction } = await import('@mysten/sui/transactions');
+    const { PACKAGE_LATEST_ID, VAULT_ID, VAULT_SHARED_VERSION, SUI_TYPE, DEPLOYER } =
+      await import('./addresses.js');
+
+    const client = new SuiGrpcClient({
+      network: 'mainnet',
+      baseUrl: 'https://fullnode.mainnet.sui.io:443',
+    });
+    const tx = new Transaction();
+    // A read still needs a sender; nothing is signed or executed, so any address will do.
+    tx.setSender(DEPLOYER);
+    tx.moveCall({
+      target: `${PACKAGE_LATEST_ID}::spend_vault::allowance`,
+      typeArguments: [SUI_TYPE],
+      arguments: [
+        tx.sharedObjectRef({
+          objectId: VAULT_ID, initialSharedVersion: VAULT_SHARED_VERSION, mutable: false,
+        }),
+        tx.pure.id(capId),
+      ],
+    });
+    const bytes = await tx.build({ client });
+    const res: any = await client.simulateTransaction({
+      transaction: bytes,
+      include: { commandResults: true },
+    });
+    const rv = res?.commandResults?.[0]?.returnValues?.[0]?.bcs;
+    if (!rv) return null;
+    // A Move u64 arrives as little-endian BCS bytes.
+    const b = rv instanceof Uint8Array ? rv : Uint8Array.from(rv);
+    let v = 0n;
+    for (let i = b.length - 1; i >= 0; i--) v = (v << 8n) | BigInt(b[i]);
+    return v;
+  } catch {
+    return null;
+  }
+}
+
+/** SUI for a human, from mist. Used in refusals, which quote real amounts. */
+function suiText(mist: bigint): string {
+  return (Number(mist) / 1e9).toString();
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const execute = args.includes('--execute');
@@ -485,6 +577,9 @@ async function main() {
   // branch — so a caller reading it gets `Hire | undefined` rather than `Hire | null`.
   const hire = hirePick.ok ? (hirePick.hire ?? null) : null;
   const policy = hire ? await policyState(hire) : null;
+  // Read after `hire` is known, because the ledger is keyed by the cap and the cap is the hire's.
+  // Null on failure, and the gate stands aside for null — see the refusal for why.
+  const allowance = hire ? await allowanceMist(hire.capId) : null;
 
   let verdict;
   if (!hirePick.ok) {
@@ -499,7 +594,7 @@ async function main() {
     verdict = { ok: false, reason: parsed.reason };
   } else {
       verdict = validate(intent, amountMist ?? null, {
-        walletSuiMist, text, hire, policy, actions: validActions,
+        walletSuiMist, allowance, text, hire, policy, actions: validActions,
       });
   }
 
@@ -535,6 +630,7 @@ async function main() {
     },
     amountMist: amountMist == null ? null : amountMist.toString(),
     walletBalanceMist: walletSuiMist.toString(),
+    allowanceMist: allowance === null ? null : allowance.toString(),
     validation: verdict,
   };
 

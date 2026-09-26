@@ -57,6 +57,15 @@ if (!listTalents().some((t) => t.id === 'http://127.0.0.1:8790')) {
 /** 0.1 SUI. Above every happy-path amount below, below the deliberate over-budget one. */
 const INJECTED_WALLET_MIST = '100000000';
 
+/**
+ * 0.01 SUI — the grant, deliberately SMALLER than the injected wallet.
+ *
+ * That gap is the point: it lets a case fail the ALLOWANCE while passing the balance, so the two
+ * refusals cannot be confused for each other. With them equal, a broken allowance check would
+ * still look right, because the balance check would refuse the same requests first.
+ */
+const INJECTED_ALLOWANCE_MIST = '10000000';
+
 const CASES = [
   {
     text: 'swap 0.005 SUI to USDC',
@@ -77,6 +86,11 @@ const CASES = [
     text: 'swap 5 SUI to USDC',
     why: 'over the balance must refuse for the BALANCE reason, not a stray one',
     expect: { decision: 'REFUSED', reasonHas: 'exceeds your wallet balance' },
+  },
+  {
+    text: 'swap 0.05 SUI to USDC',
+    why: 'over the GRANT but under the balance — must refuse for the allowance, naming both figures',
+    expect: { decision: 'REFUSED', reasonHas: 'more than the 0.01 SUI your grant allows' },
   },
   {
     text: 'swap 0.01 USDC to SUI',
@@ -104,7 +118,7 @@ function run(text) {
   const r = spawnSync('bun', ['src/agent.ts', text], {
     encoding: 'utf-8',
     timeout: 300_000,
-    env: { ...process.env, AGENT_WALLET_BALANCE_MIST: INJECTED_WALLET_MIST },
+    env: { ...process.env, AGENT_WALLET_BALANCE_MIST: INJECTED_WALLET_MIST, AGENT_ALLOWANCE_MIST: INJECTED_ALLOWANCE_MIST },
   });  const out = r.stdout || '';
   const start = out.indexOf('{');
   for (let end = out.length; end > start && start >= 0; end--) {
@@ -197,7 +211,7 @@ try {
     // The override is DELETED, not set to undefined: spawnSync stringifies env values,
     // so `{ KEY: undefined }` arrives as the literal string "undefined" and BigInt would
     // throw — failing this check for a reason that has nothing to do with what it tests.
-    env: (({ AGENT_WALLET_BALANCE_MIST: _drop, ...rest }) => rest)(process.env),
+    env: (({ AGENT_WALLET_BALANCE_MIST: _drop, AGENT_ALLOWANCE_MIST: _drop2, ...rest }) => rest)(process.env),
   });
   const out = r.stdout || '';
   const start = out.indexOf('{');
