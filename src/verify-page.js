@@ -375,6 +375,42 @@ for (const token of ['--background', '--foreground', '--sidebar', '--card', '--b
     'no local figure — the UI cannot say where a number came from when the read fails');
 }
 
+/*
+ * The sheet makes claims about order.move, so they are checked against it.
+ *
+ * A swap from chat does not use the vault path, so three of the policy's five fields do not touch
+ * it: order.move checks the agent and the pool allowlist and never the allowance, is_suspended or
+ * max_slippage_bps. The order is the policy for that path — min_out, the fee and the TTL.
+ *
+ * THESE TWO CHECKS ARE MEANT TO FAIL WHEN THE CONTRACT GROWS THE CHECK. If order.move ever starts
+ * enforcing the allowance or the suspension flag, the warning in the sheet becomes the wrong
+ * statement, and a red test is the cheapest way to be told.
+ */
+{
+  const order = fs.readFileSync('move/sources/order.move', 'utf8');
+  const sheet = fs.readFileSync('src/web/app/components/PolicySheet.tsx', 'utf8');
+
+  check('the sheet warns that the budget does not bound a swap',
+    sheet.includes('DOES NOT BOUND A SWAP'),
+    'the field implies a limit it does not enforce');
+  check('the sheet warns that suspension does not stop a fill',
+    sheet.includes('does not stop a fill'),
+    'the kill switch reads as if it stops the swap flow');
+
+  check('order.move does not check the allowance, so the warning is true',
+    !/allowance/.test(order),
+    'order.move now checks the allowance — the sheet hint must be rewritten');
+  check('order.move does not check is_suspended, so the warning is true',
+    !/is_suspended/.test(order),
+    'order.move now checks is_suspended — the sheet hint must be rewritten');
+
+  // The two that DO bite, so a future edit cannot quietly drop one.
+  check('order.move still gates on the agent', /policy::agent\(policy\)/.test(order),
+    'the settler gate is gone');
+  check('order.move still gates on the pool allowlist', /is_pool_allowed/.test(order),
+    'the venue gate is gone');
+}
+
 if (failures) {
   console.error(`\n${failures} check(s) failed.`);
   process.exit(1);

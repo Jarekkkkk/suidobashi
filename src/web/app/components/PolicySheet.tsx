@@ -144,7 +144,7 @@ export function PolicySheet({
 
           <Field
             label="budget"
-            hint="read from the OpenZeppelin ledger, and it is what is LEFT, not what was granted — the contract stores only the remaining figure, so the original grant is not recoverable. typing a new number sets it and resets the spent counter."
+            hint="read from the OpenZeppelin ledger, and it is what is LEFT, not what was granted — the contract stores only the remaining figure, so the original grant is not recoverable. typing a new number sets it and resets the spent counter. DOES NOT BOUND A SWAP: the swap flow escrows from your wallet and is bounded by the order's min_out, fee and one-minute TTL instead. this number governs the vault path, which nothing currently calls."
           >
             <div className="flex items-center gap-2">
               <input
@@ -189,7 +189,7 @@ export function PolicySheet({
             </div>
           </Field>
 
-          <Field label="suspended" hint="the kill switch. stops the agent without touching its budget or its allowed objects.">            <button
+          <Field label="suspended" hint="the kill switch for the VAULT path. it does not stop a fill: order.move checks the agent and the pool, and never is_suspended. stopping a fill means letting the order expire or not creating one.">            <button
               className={cn(
                 'rounded-md border px-3 py-1.5 text-[12px] transition-colors',
                 suspended
