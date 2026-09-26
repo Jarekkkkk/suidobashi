@@ -349,7 +349,13 @@ async function fireDueSchedules() {
     try {
       const side = String(s.params.side ?? 'ask');
       const out = runGrid(['--side', side, '--levels', '1', '--execute']);
-      console.log(JSON.stringify({ scheduled: s.id, action: s.action, ok: out.status === 0, steps: out.steps.length }));
+      // The DIGEST, not only a count. A scheduled pass places real orders, and a log line that says
+      // "two steps" leaves whoever reads it with no way to find what was placed — which is exactly
+      // how one 1 SUI order became unfindable after the first live fire.
+      const digest = (out.steps as { digest?: string | null }[]).find((st) => st.digest)?.digest ?? null;
+      console.log(JSON.stringify({
+        scheduled: s.id, action: s.action, ok: out.status === 0, steps: out.steps.length, digest,
+      }));
     } catch (e) {
       console.log(JSON.stringify({ scheduled: s.id, action: s.action, error: String((e as Error).message).slice(0, 200) }));
     }

@@ -377,3 +377,17 @@ reason for that order.
 
 Next: transactions 2–7, then the submission half and the flow. Transaction 5 still settles the
 quantity scale, and is still the one that matters.
+
+### Where it ended
+
+Everything above ran, and two things this section said turned out to be wrong rather than early:
+
+- **Steps 2 and 3 are ONE transaction, not two.** Sui refuses to share an object an earlier
+transaction created, and `create` shares the BalanceManager — so an account and its guard are born
+together or not at all. Simulated both ways against mainnet before believing it.
+- **The quantity scale was never the problem.** It is raw base units (1e9 = 1 SUI); what looked like
+a scale mismatch was the pool's own MINIMUM order size, 1 SUI, found by bracketing refusals.
+
+Beyond the sequence: the caller's half and the runner's submission half are built, the guard is a
+talent an agent can call (`grid.status`, `grid.run`), and a user-requested schedule placed a real
+order through a timer. `deepbook_guard` is live at `0xe420d1be…`, v9.
