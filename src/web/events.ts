@@ -22,7 +22,7 @@
 
 /** The closed set. Adding one is a deliberate act, not an inline string somewhere. */
 export type EventKind =
-  | 'extracting' | 'proposed' | 'asking' | 'refused' | 'building' | 'awaiting-signature'
+  | 'extracting' | 'proposed' | 'asking' | 'answered' | 'refused' | 'building' | 'awaiting-signature'
   | 'submitting' | 'notified' | 'filling' | 'filled' | 'expired' | 'revoking' | 'revoked';
 
 export type EventSource = 'model' | 'pipeline' | 'chain';
@@ -31,6 +31,7 @@ export const EVENT_KINDS: EventKind[] = [
   'extracting',          // the local model is running
   'proposed',            // the deterministic gate allowed it
   'asking',              // the gate could not decide, and lists the candidates
+  'answered',            // the app answered it directly; the model was not asked
   'refused',             // the gate declined it, with a reason
   'building',            // constructing the transaction
   'awaiting-signature',  // the wallet has been asked

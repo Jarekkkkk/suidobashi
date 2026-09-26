@@ -348,6 +348,14 @@ function quoteMinOut(amountMist: bigint, feeOut: bigint): bigint | null {
 const RUNTIME = process.env.SUI_RUNTIME || 'bun';
 
 /**
+ * Requests the APP answers itself, without the model.
+ *
+ * Deliberately broad and deliberately a regex: a false positive answers a question the user
+ * probably asked, and a false negative refuses as before. Neither can cause an action.
+ */
+const CAPABILITY_QUESTION = /\b(what|which|list|show)\b[^?]{0,40}\b(skill|skills|talent|talents|can you do|are you able|tools|actions)\b/i;
+
+/**
  * The request body, as the routes pass it to the dispatcher.
  *
  * NAMED FIELDS rather than `any` or `unknown`, and both alternatives were tried:
@@ -1599,6 +1607,33 @@ const server = http.createServer((req, res) => {
         if (typeof body.text !== 'string' || !body.text.trim()) {
           return send(400, JSON.stringify({ error: 'text required' }));
         }
+        // ANSWERED BY THE APP, NOT THE MODEL, and it has to come first.
+        //
+        // The local model is an EXTRACTOR: it turns a sentence into an action, a direction and an
+        // amount. Ask it what it can do and it correctly reports an action it does not recognise,
+        // which the gate refuses — so "what skills do you have" came back as a refusal, from a
+        // system that knows the answer perfectly well and simply was not asked.
+        //
+        // A heuristic rather than a classifier, and deliberately: the alternative is asking a 0.6B
+        // model to decide whether it is being asked a question, which is exactly the kind of
+        // judgement it is bad at. If this misses a phrasing, the user gets a refusal — the same
+        // behaviour as before, not a wrong action.
+        if (CAPABILITY_QUESTION.test(body.text)) {
+          const lines = BUILT_IN_TALENTS.flatMap((t) => t.actions.map((a) => `- ${a.id}: ${a.title}`));
+          const installed = listTalents();
+          const text = [
+            'I can do these:',
+            ...lines,
+            installed.length
+              ? `\nInstalled over MCP (services I can ask): ${installed.map((t) => t.name).join(', ')}.`
+              : '',
+          ].filter(Boolean).join('\n');
+          return send(200, JSON.stringify({
+            decision: 'ANSWERED',
+            events: [event('answered', 'pipeline', text)],
+          }));
+        }
+
         const r = runAgent(body.text);
         // The events this step produced. `extracting` is MODEL-sourced because the
         // model's part is advisory; the verdict is PIPELINE, because the gate is our
@@ -1620,8 +1655,12 @@ const server = http.createServer((req, res) => {
               ? event('asking', 'pipeline', 'the request names more than one — which one?',
                   { options, template })
               : event('refused', 'pipeline', ending('refused', {
+                // `doc.reason` as well as the validation's: the gate refuses in two places —
+                // a verdict that says no, and a plan that cannot be built — and reading only the
+                // first reported the second as the decision STRING, which is how a user came to
+                // see "refused — REFUSED". The decision is not a reason and never was.
                 reason: (doc && doc.validation && doc.validation.reason)
-                  || (doc && doc.decision) || 'could not parse a proposal',
+                  || (doc && doc.reason) || 'the request could not be turned into an action',
               })),
         ];
         return send(200, JSON.stringify({ ...r, decision, options, template, events }));

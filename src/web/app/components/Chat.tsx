@@ -298,7 +298,7 @@ export function Chat({
                       {isAsk ? 'you' : e.source}
                     </span>
                     <span className={cn(
-                      'min-w-0 break-words text-[13px] leading-relaxed',
+                      'min-w-0 whitespace-pre-line break-words text-[13px] leading-relaxed',
                       e.terminal ? 'text-foreground' : 'text-muted-foreground',
                     )}>
                       {e.text}
