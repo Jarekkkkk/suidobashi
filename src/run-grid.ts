@@ -222,7 +222,24 @@ async function main() {
   const { signer, keyName } = await signerForSeat(guard.agent);
   tx.setSender(guard.agent);
 
-  const bytes = await tx.build({ client });
+  // The build RESOLVES, which simulates — so a transaction that cannot execute throws HERE rather
+  // than at submission. That is the useful place for it, provided it is reported as a refusal
+  // instead of a stack trace: a runner that dies on an empty account reads as broken rather than
+  // as poor, and the difference matters when the same code runs unattended over many accounts.
+  let bytes: Uint8Array;
+  try {
+    bytes = await tx.build({ client });
+  } catch (e) {
+    console.log(JSON.stringify({
+      mode: EXECUTE ? 'execute' : 'dry-run', step: 'run-grid',
+      refused: `the transaction would not execute: ${String((e as Error).message).slice(0, 240)}`,
+      would: { cancel: plan.cancel.length, place: plan.place.length },
+      account: { guard: GUARD, balanceManager: BM },
+      hint: 'an order is paid out of the BalanceManager, not the wallet — a ladder needs that side '
+        + 'funded before it can rest',
+    }, null, 2));
+    process.exit(1);
+  }
   if (!EXECUTE) {
     const sim: any = await client.simulateTransaction({ transaction: bytes });
     const payload = sim.Transaction ?? sim.FailedTransaction ?? {};
