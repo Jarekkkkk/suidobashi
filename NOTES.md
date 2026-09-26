@@ -572,6 +572,24 @@ zero fee, so "no fee" has exactly one representation rather than two. Absence ge
 means zero here — but only once the lookup is known to be right, which is a separate
 question and the one that was wrong.
 
+**MVR cannot resolve `@deepbook/core`, and the repo's `main` is not mainnet.**
+`deepbook = { r.mvr = "@deepbook/core" }` — the form DeepBook's own skill documents — fails
+with `Version 8 of @deepbook/core does not have git information specified`: MVR's record for
+that version carries no git rev, so no source dependency can be built. Same registry gap that
+forced `spend_vault` to be inlined. It is pinned to git at the `v8.0.0` tag instead, and that
+tag was chosen by matching the DEPLOYED ABI rather than by taking the newest one: `main`
+carries `pool::place_post_only_limit_order`, which mainnet v8 does not have, so compiling
+against `main` would link a call that aborts on chain. A version pin is a claim about the
+chain — check it against the chain's ABI, not against the docs (whose address table still
+stops at v6) and not against the default branch.
+
+**`share_object` is module-restricted; `public_share_object` is the path for a dependency's
+type.** Sharing DeepBook's `BalanceManager` from `deepbook_guard::create` is refused —
+`Invalid private transfer ... restricted to being called in the object's module` — and the
+same diagnostic names the fix, because that type has `store`. The private form only works on
+a type the calling module declares, which is why `transfer::share_object(guard)` is right for
+our own guard one line below and wrong for the BalanceManager above it.
+
 ## Mainnet feature flags (protocol 136, read from the node)
 
 ```text

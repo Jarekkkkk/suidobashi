@@ -5,6 +5,21 @@ edition = "2024"
 [dependencies]
 cetus_clmm = { r.mvr = "@cetuspackages/clmm" }
 
+# DeepBook v3, for the order book behind `deepbook_guard`.
+#
+# Pinned to the `v8.0.0` tag, which is the version live on mainnet
+# (`published-at 0x0e735f8c93a95722efd73521aca7a7652c0bb71ed1daf41b26dfd7d1ff71f748`).
+#
+# NOT `r.mvr = "@deepbook/core"`, which fails: MVR's record for version 8 carries no git
+# information, so the resolver cannot produce a source dep. Same registry gap that forced
+# `spend_vault` to be inlined.
+#
+# NOT the repo's `main` branch either, which is ahead of the published version — it carries
+# `pool::place_post_only_limit_order`, a function this mainnet version does not have
+# (confirmed against the deployed ABI). Compiling against `main` would link calls that
+# abort on chain. The tag was checked the same way: it does not contain that function.
+deepbook = { git = "https://github.com/MystenLabs/deepbookv3.git", subdir = "packages/deepbook", rev = "e008c811d5eaf100fa63fe3d261995de75e84373" }
+
 # `spend_vault` is inlined into sources/ rather than taken as a dependency.
 #
 # OpenZeppelin ships that allowance package open-source but does not register it,
