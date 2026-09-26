@@ -191,3 +191,53 @@ it). If not, the grid is one order per transaction. Decide by running one dry-ru
 Raw tick/lot/min for the pool are not in its top-level JSON (state sits in a dynamic field); the
 docs' table says tick `0.00001`, lot `0.1` for SUI/USDC. Must be read from chain at implementation
 time — this is the same class of unit error that produced the thousandfold bug in the amount parser.
+
+## 7. Three flavors of "help others"
+
+A guard is one account, one operator address, one set of limits. That single shape carries the first
+two ways of helping someone, and offers nothing for the third.
+
+### (a) Self-serve — the maker's own operator
+
+Built. The maker's wallet, or their own runner, is the `agent`; `set_agent` rotates it.
+
+### (b) Managed — one operator, many users
+
+**Needs no new contract surface.** Checked against the module rather than argued:
+
+- The module holds **no global state**: no `init`, and the only shared objects it ever creates are
+  the caller's BalanceManager and the guard itself (two call sites, both in `create`). An operator
+  serving a thousand users has nothing shared to coordinate through, because there is nothing to
+  create.
+- Authority is a per-guard `address` field, so one address sits in any number of guards while the
+  limits stay each maker's own (`one_operator_serves_many_guards`,
+  `a_guards_band_does_not_apply_to_another_guard`).
+- Events carry `guard_id` **and** `agent`, at creation and on every change (`GuardCreated`,
+  `GuardUpdated`), so an operator finds the guards it serves without a registry object.
+- What a user risks from an operator is that user's band, per-order bound and budget — and leaving
+  is `set_agent`, or `revoke_trade_cap` if trust is gone entirely.
+- **A user never depends on the operator to recover their own book.** Resting orders belong to the
+  account, not the operator, and every cancel path is agent-gated — so an abandoned maker takes the
+  seat with one `set_agent(maker)` and clears their own orders
+  (`the_maker_can_take_the_agent_seat_and_unwind`).
+
+One dependency is **not** verified, and it is the one that decides (b)'s economics: whether a single
+transaction may touch many guards and one pool, so N users cost one transaction instead of N. Every
+order path takes `&mut Pool`, and whether Sui permits the same shared Pool as a mutable argument in
+several commands of one PTB is a question about the transaction, not about this module. Needs a dry
+run against the published package. Until then: one transaction per guard.
+
+### (c) Programmable — the agent is a Move contract
+
+**Not possible as this plan wrote it, and the plan was wrong.** A Move module can never be
+`ctx.sender()` — that is the transaction signer, and a module does not sign. An address-gated guard
+cannot admit a contract as its agent, no matter what the contract does.
+
+Making it work means changing the gate from *is the caller this address* to *did the caller present
+this capability* — an `AgentCap` object that a module could hold as a dynamic field. That is a
+different trust shape, worth stating plainly: today there is **nothing at the operator to steal**,
+which this design bought deliberately. An `AgentCap` is a stealable object, and holding it would
+authorise trading every guard that accepted it. So (c) trades away "nothing to steal" for
+programmability, and moves the strategy on chain where a bug cannot be fixed by a restart.
+
+Deferred on those grounds, not on effort.

@@ -765,6 +765,35 @@ fun a_foreign_deposit_cap_is_refused_by_deepbook_on_use() {
     s.end();
 }
 
+/// The maker's recovery path, and the reason an operator is not someone a maker depends on. An
+/// operator that is gone — rotated away, revoked, or simply absent — leaves resting orders on the
+/// book: those orders belong to the account, not to the operator. And the maker cannot cancel them
+/// *as maker*, because every cancel path is agent-gated. Taking the seat costs one `set_agent`,
+/// after which the maker unwinds their own book with no operator in the loop at all.
+#[test]
+fun the_maker_can_take_the_agent_seat_and_unwind() {
+    let mut s = ts::begin(ALICE);
+    let (guard_id, balance_manager_id) = setup_in_band(&mut s, OPERATOR);
+
+    // The operator leaves, and nothing about the account changes — the orders are still resting.
+    s.next_tx(ALICE);
+    {
+        let mut g = take(&mut s, guard_id);
+        deepbook_guard::set_agent(&mut g, ALICE, s.ctx());
+        ts::return_shared(g);
+    };
+
+    // The maker now passes the exact gate `cancel_all` applies, so the book is theirs to clear.
+    s.next_tx(ALICE);
+    {
+        let g = take(&mut s, guard_id);
+        assert_eq!(deepbook_guard::agent(&g), ALICE);
+        deepbook_guard::check_agent_may_act_for_testing(&g, pool(), balance_manager_id, s.ctx());
+        ts::return_shared(g);
+    };
+    s.end();
+}
+
 // === The budget ===
 
 /// That the totals add up, which the refusal test alone cannot show: an off-by-one in the counter

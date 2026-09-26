@@ -614,6 +614,13 @@ package's tests. `#[expected_failure(abort_code = 1)]` with a comment saying whi
 is the only form available; reading the source is how the number gets known. 0 is `EInvalidOwner`,
 1 is `EInvalidTrader`.
 
+**A Move module can never be `ctx.sender()`, so an address gate cannot admit a contract.** The plan
+carried a "programmable agent" flavor: the guard's `agent` set to a Move contract holding the
+strategy. It cannot work — `ctx.sender()` is the transaction signer, and a module does not sign.
+Programmability needs the gate to become a *presented capability* (an `AgentCap` object) instead of
+an address, which is a different trust shape: today there is nothing at the operator to steal, and
+a capability is precisely a stealable thing. Written down before anyone builds it twice.
+
 ## Mainnet feature flags (protocol 136, read from the node)
 
 ```text
