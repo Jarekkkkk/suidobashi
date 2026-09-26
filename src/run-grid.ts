@@ -45,6 +45,15 @@ const BM = flag('--bm');
 const LEVELS = Number(flag('--levels', '5'));
 const QUANTITY = BigInt(flag('--quantity-raw', '1000000000'));
 const SIDE = flag('--side', 'bid') as 'bid' | 'ask';
+/**
+ * How long the ladder's orders live, in minutes.
+ *
+ * Worth a flag rather than a constant. DeepBook REQUIRES an expiry and refuses a zero, so a grid
+ * without one is impossible; and the useful value differs by an order of magnitude between testing
+ * and production. A one-minute ladder also expires its own escrow back to settled balances, which is
+ * what makes "place a ladder, watch it, walk away" safe.
+ */
+const EXPIRE_MIN = Number(flag('--expire-min', '60'));
 const EXECUTE = has('--execute');
 
 if (!GUARD || !BM) {
@@ -218,6 +227,7 @@ async function main() {
       orderType: 3, // POST_ONLY: a grid level must REST, never cross
       price: level.price,
       quantity: level.quantity,
+      expireMs: BigInt(Date.now() + EXPIRE_MIN * 60_000),
     };
     // Which side it rests on is decided by what the account is funded in, which is why the plan
     // carries its own side rather than the caller assuming one.

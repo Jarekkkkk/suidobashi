@@ -332,7 +332,14 @@ async function main() {
       // The ask rests above the market and the bid below it, so this is a maker order either way.
       const price = side === 'buy' ? PRICE_MIN_RAW : PRICE_MAX_RAW;
       const opts = {
-        clientOrderId: 1n, orderType: 0, price, quantity: BigInt(rawQuantity!),
+        clientOrderId: 1n,
+        orderType: 0,
+        price,
+        quantity: BigInt(rawQuantity),
+        // Minutes, because DeepBook requires an expiry and refuses a zero — "no expiry" is a
+        // timestamp far out, not an absent one. A short one is what a test wants: the escrow comes
+        // back on its own when it lapses.
+        expireMs: BigInt(Date.now() + Number(flag('--expire-min', '60')) * 60_000),
       };
       const refs = await orderRefs(guard!, bm!);
       if (side === 'buy') buyTx(tx, refs, opts);
@@ -384,6 +391,10 @@ async function main() {
       // types under `objectTypes`.
       const digest = flag('--digest');
       if (!digest) fail('--digest is required');
+      // SAFETY: `getTransaction`'s declared return type names none of the fields requested here,
+      // because which arrive depends on include options its type cannot express. The keys used are
+      // the ones the SDK itself pushes read paths for (`effects`, `events`), and every field is read
+      // with `?.`, so a shape that differs yields null — an empty answer, never a wrong one.
       const full = unwrap(((await client.getTransaction({
         digest, include: { effects: true, events: true, objectTypes: true },
       } as never)) as unknown)) as unknown as {
