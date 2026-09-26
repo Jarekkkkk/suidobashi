@@ -144,7 +144,7 @@ export function PolicySheet({
 
           <Field
             label="budget"
-            hint="read from the OpenZeppelin ledger, and it is what is LEFT, not what was granted — the contract stores only the remaining figure, so the original grant is not recoverable. typing a new number sets it and resets the spent counter. DOES NOT BOUND A SWAP: the swap flow escrows from your wallet and is bounded by the order's min_out, fee and one-minute TTL instead. this number governs the vault path, which nothing currently calls."
+            hint="read from the OpenZeppelin ledger, and it is what is LEFT, not what was granted — the contract stores only the remaining figure, so the original grant is not recoverable. typing a new number sets it and resets the spent counter. BOUNDS ONE ORDER: an order larger than this is refused before it is created. it is NOT a spending total — the allowance is not decremented, so several orders of this size each pass a grant that covers one."
           >
             <div className="flex items-center gap-2">
               <input

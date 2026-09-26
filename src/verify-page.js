@@ -378,33 +378,34 @@ for (const token of ['--background', '--foreground', '--sidebar', '--card', '--b
 /*
  * The sheet makes claims about order.move, so they are checked against it.
  *
- * A swap from chat does not use the vault path, so three of the policy's five fields do not touch
- * it: order.move checks the agent and the pool allowlist and never the allowance, is_suspended or
- * max_slippage_bps. The order is the policy for that path — min_out, the fee and the TTL.
+ * The allowance one FLIPPED when create_with_policy landed. It used to assert that order.move did
+ * NOT check the allowance — which was true, and was why the budget bounded nothing reachable. Now
+ * it asserts the opposite, and it caught the stale hint the moment the contract changed: verify
+ * went red with "order.move now checks the allowance — the sheet hint must be rewritten".
  *
- * THESE TWO CHECKS ARE MEANT TO FAIL WHEN THE CONTRACT GROWS THE CHECK. If order.move ever starts
- * enforcing the allowance or the suspension flag, the warning in the sheet becomes the wrong
- * statement, and a red test is the cheapest way to be told.
+ * A check written to fail on improvement is only useful if the failure is acted on. It was not,
+ * the first time: the commit that added create_with_policy pushed a red verify, which is the same
+ * mistake already in NOTES about batching verify with git.
  */
 {
   const order = fs.readFileSync('move/sources/order.move', 'utf8');
   const sheet = fs.readFileSync('src/web/app/components/PolicySheet.tsx', 'utf8');
 
-  check('the sheet warns that the budget does not bound a swap',
-    sheet.includes('DOES NOT BOUND A SWAP'),
-    'the field implies a limit it does not enforce');
-  check('the sheet warns that suspension does not stop a fill',
-    sheet.includes('does not stop a fill'),
-    'the kill switch reads as if it stops the swap flow');
+  check('the sheet says the budget bounds one order',
+    sheet.includes('BOUNDS ONE ORDER'),
+    'the field no longer says what it does');
+  check('the sheet says it is not a spending total',
+    sheet.includes('NOT a spending total'),
+    'the per-order ceiling reads as a total, which it is not');
 
-  check('order.move does not check the allowance, so the warning is true',
-    !/allowance/.test(order),
-    'order.move now checks the allowance — the sheet hint must be rewritten');
-  check('order.move does not check is_suspended, so the warning is true',
+  check('order.move enforces the allowance, so the sheet is true',
+    /EExceedsAllowance/.test(order),
+    'create_with_policy lost its allowance check — the sheet claim is now false');
+  check('order.move does not check is_suspended, so that warning is true',
     !/is_suspended/.test(order),
     'order.move now checks is_suspended — the sheet hint must be rewritten');
 
-  // The two that DO bite, so a future edit cannot quietly drop one.
+  // The two settle gates, so a future edit cannot quietly drop one.
   check('order.move still gates on the agent', /policy::agent\(policy\)/.test(order),
     'the settler gate is gone');
   check('order.move still gates on the pool allowlist', /is_pool_allowed/.test(order),
