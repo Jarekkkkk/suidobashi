@@ -32,13 +32,13 @@ export const EVENT_KINDS = [
   'filling',             // the filler is working
   'filled',              // settled, and the output has arrived
   'expired',             // the window closed with nobody taking it
-  'refunded',            // the escrow is back with the maker
+  'revoked',             // the escrow is back with the maker
 ];
 
 export const SOURCES = ['model', 'pipeline', 'chain'];
 
 /** Kinds after which the flow has stopped and no further event will follow. */
-export const TERMINAL_KINDS = ['refused', 'filled', 'expired', 'refunded'];
+export const TERMINAL_KINDS = ['refused', 'filled', 'expired', 'revoked'];
 
 /**
  * Build one event. Throws on an unknown kind or source rather than emitting something
@@ -61,7 +61,11 @@ export function event(kind, source, text, data = null) {
 const ENDING = {
   filled: (d) => `filled — you received ${d.received}`,
   expired: () => 'the window closed before anyone filled it, and your escrow came back',
-  refunded: () => 'refunded — the escrow is back in your wallet',
+  // "Revoked", not "refunded". A refund reads as paying someone out; this is the maker taking
+  // their own escrow back. The action is called `revoke` everywhere a user sees it, and a
+  // terminal message using a different word for the same thing is the drift that makes an
+  // interface feel unreliable.
+  revoked: () => 'revoked — your escrow is back in your wallet',
   refused: (d) => `refused — ${d.reason}`,
 };
 

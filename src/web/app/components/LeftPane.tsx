@@ -82,27 +82,70 @@ export function LeftPane({ events, say, onTerms }: { events: Event[]; say: Say; 
     if (terminalCount > 0) void load();
   }, [terminalCount, load]);
 
-  /** Act on one row. The same three steps the chat uses, so the property is identical. */
+  /**
+   * Act on one row.
+   *
+   * TWO PATHS, and the split is deliberate. A BURN is signed in the wallet, because Slush
+   * handles it and the rebate goes to whoever signs — the maker should be that person.
+   *
+   * A REVOKE is executed by the server. Slush refuses to even prepare the refund transaction
+   * — it fails before showing a modal — while the chain executes the identical bytes happily,
+   * so routing around a wallet bug by removing the wallet is the smaller change. It is also
+   * the safer one: the destination is FIXED AT CREATE, so a revoke can only ever return escrow
+   * to its maker. That is precisely why the operation is permissionless on chain, and why the
+   * server gains no power by running it.
+   */
   async function act(order: Order) {
     if (busy) return;
     setBusy(true);
+
+    if (order.action === 'revoke') {
+      say({
+        kind: 'revoking',
+        source: 'pipeline',
+        text: 'revoking the expired order…',
+        terminal: false,
+      });
+      try {
+        const r = await api<{ ok?: boolean; digest?: string; why?: string; events?: Event[] }>(
+          '/api/revoke', { orderId: order.orderId },
+        );
+        (r.events ?? []).forEach(say);
+        if (!r.ok && !r.events?.length) {
+          say({
+            kind: 'refused',
+            source: 'pipeline',
+            text: `refused — ${r.why ?? 'the revoke did not go through'}`,
+            terminal: true,
+          });
+        }
+        await load();
+      } catch (e) {
+        say({
+          kind: 'ended',
+          source: 'pipeline',
+          text: `ended: ${e instanceof Error ? e.message : String(e)}`,
+          terminal: true,
+        });
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+
     say({
-      kind: order.action === 'burn' ? 'reclaiming' : 'revoking',
+      kind: 'reclaiming',
       source: 'pipeline',
-      text: order.action === 'burn'
-        ? 'reclaiming a settled order\u2019s storage…'
-        : 'revoking an expired order…',
+      text: 'reclaiming a settled order\u2019s storage…',
       terminal: false,
     });
     try {
       const digest = await signAndSubmit(order.action, { orderId: order.orderId }, say, onTerms);
       if (digest) {
         say({
-          kind: order.action === 'burn' ? 'reclaimed' : 'revoked',
+          kind: 'reclaimed',
           source: 'chain',
-          text: order.action === 'burn'
-            ? `reclaimed — ${digest} · about 0.0042 SUI of storage back`
-            : `revoked — ${digest} · your escrow is on its way back`,
+          text: `reclaimed — ${digest} · about 0.0042 SUI of storage back`,
           terminal: true,
           data: { digest, orderId: order.orderId },
         });
