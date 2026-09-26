@@ -155,8 +155,8 @@ export function PolicySheet({
           </Field>
 
           <Field
-            label="venues"
-            hint="pools the agent may trade against. empty means no venue is approved, and the agent can do nothing."
+            label="allowed_shared_objects"
+            hint="the one object id the agent supplies. every other shared object in a swap — the policy, the vault, the config, the clock — is fixed in the code; this one arrives from the request, so it has to be approved here. empty means the agent can trade nowhere."
           >
             <div className="flex flex-col gap-1.5">
               {venues.map((v) => (
@@ -186,8 +186,7 @@ export function PolicySheet({
             </div>
           </Field>
 
-          <Field label="suspended" hint="the kill switch. stops the agent without touching its budget or venues.">
-            <button
+          <Field label="suspended" hint="the kill switch. stops the agent without touching its budget or its allowed objects.">            <button
               className={cn(
                 'rounded-md border px-3 py-1.5 text-[12px] transition-colors',
                 suspended
