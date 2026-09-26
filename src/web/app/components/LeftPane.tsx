@@ -291,67 +291,6 @@ export function LeftPane({
           <div className="flex h-full flex-col">
             {/* What the model can DO. */}
             <TalentsPane />
-
-            {/* THE GRANT IS NOT LISTED. A grant is one thing you have, not a set you choose
-                between, so the pane does not enumerate it — it offers the two things you can
-                DO with it. Everything the card used to show (agent, budget, venue count) is
-                in the sheet, where it is editable rather than merely displayed. */}
-            <div className="flex flex-col gap-3 border-t border-border p-3">
-              <div className="flex items-start gap-2">
-                <div className="flex-1">
-                  <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                    grants
-                  </div>
-                  <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground/60">
-                    On-chain permissions. A talent that spends needs one; a talent that only reads
-                    does not.
-                  </p>
-                </div>
-
-                <div className="flex shrink-0 items-center gap-0.5 pt-0.5">
-                  {/* Read again from the chain. The icon spins while the read is in flight,
-                      because a refresh that gives no sign it is working is indistinguishable
-                      from one that did nothing. */}
-                  <button
-                    className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
-                    onClick={() => void load()}
-                    disabled={reading}
-                    title="refresh"
-                    aria-label="refresh"
-                  >
-                    <svg
-                      className={cn('h-3.5 w-3.5', reading && 'animate-spin')}
-                      viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-                    >
-                      <path d="M21 12a9 9 0 1 1-2.64-6.36" />
-                      <path d="M21 3v6h-6" />
-                    </svg>
-                  </button>
-
-                  <button
-                    className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                    onClick={() => setSheetOpen(true)}
-                    title="policy"
-                    aria-label="policy"
-                  >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <circle cx="12" cy="12" r="3" />
-                      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-                    </svg>
-                  </button>
-                </div>
-              </div>
-
-            {/* The sheet reads its baseline from the chain row, so it can show what a save
-                would change rather than only what the fields contain. */}
-            {sheetOpen && (() => {
-              const h = (hires ?? []).find((x) => x.name === 'standard');
-              return h ? (
-                <PolicySheet hire={h} busy={busy} onClose={() => setSheetOpen(false)} run={run} />
-              ) : null;
-            })()}
-            </div>
           </div>
         )}
 
@@ -413,11 +352,48 @@ export function LeftPane({
         )}
       </div>
 
-      <div className="shrink-0 border-t border-border p-2">
-        <Button size="sm" variant="ghost" className="w-full" onClick={() => void load()} disabled={reading}>
+      {/* THE FOOTER IS THE PANE'S, NOT A TAB'S. These act on the policy and on the chain read,
+          both of which are true whatever tab is showing — the grant is not a property of the
+          talents tab, and putting its controls inside one tab made them look like they were. */}
+      <div className="flex shrink-0 items-center gap-1 border-t border-border p-2">
+        <Button
+          size="sm" variant="ghost" className="flex-1 justify-start gap-1.5"
+          onClick={() => void load()} disabled={reading} title="refresh"
+        >
+          {/* The icon spins while the read is in flight, because a refresh that gives no sign
+              it is working is indistinguishable from one that did nothing. */}
+          <svg
+            className={cn('h-3.5 w-3.5', reading && 'animate-spin')}
+            viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+          >
+            <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+            <path d="M21 3v6h-6" />
+          </svg>
           {reading ? 'reading…' : 'refresh'}
         </Button>
+
+        <Button
+          size="sm" variant="ghost" className="gap-1.5"
+          onClick={() => setSheetOpen(true)} title="policy"
+        >
+          <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
+          policy
+        </Button>
       </div>
+
+      {/* The sheet reads its baseline from the chain row, so it can show what a save would
+          change rather than only what the fields contain. Outside the tabs, because it is a
+          fixed overlay and the policy is not a property of whichever tab is showing. */}
+      {sheetOpen && (() => {
+        const h = (hires ?? []).find((x) => x.name === 'standard');
+        return h ? (
+          <PolicySheet hire={h} busy={busy} onClose={() => setSheetOpen(false)} run={run} />
+        ) : null;
+      })()}
     </div>
   );
 }
