@@ -97,10 +97,27 @@ can `withdraw<T>(bm, amount, ctx)` with no cap at all, and `revoke_trade_cap` to
 outright. So a bug in the wrapper cannot trap the funds, and there are two independent stops below
 ours. This is the property that makes the design safe to deploy.
 
-Constraints worth knowing: withdrawals only touch **settled** balances — funds in resting orders
-cannot be withdrawn until canceled, so a stop must `cancel_all_orders` before any withdraw. Caps are
-capped at 1,000 per BalanceManager (irrelevant here). `_v2` on `new_with_custom_owner_caps_v2` is
+Constraints worth knowing. Withdrawals only touch **settled** balances — funds in resting orders
+cannot be withdrawn until canceled, so a stop must `cancel_all_orders` before any withdraw. The cap
+ceiling is 1,000 per BalanceManager, counted across all three types, so one account can back ~330
+guards at three caps each — nowhere near this design. `_v2` on `new_with_custom_owner_caps_v2` is
 mandatory; the unsuffixed name is a stub that aborts 1337.
+
+**What isolation actually rests on**, checked against the source rather than assumed, because the
+code path is not what enforces it:
+
+- A cap belongs to an account by **allowlist membership**, not by the `balance_manager_id` field it
+  carries: every validator asserts `allow_listed.contains(object::borrow_id(cap))`. Presenting one
+  account's cap against another aborts `EInvalidTrader` (= 1).
+- So the **trade** cap *can* be checked at creation, by attempting the proof every order needs —
+  Move cannot catch an abort, so the check IS the call. `create` now does this, and a mismatched
+  pair is refused rather than producing a guard whose every order aborts inside DeepBook.
+- The **deposit and withdraw** caps cannot be checked the same way: `validate_deposit_cap` and
+  `validate_withdraw_cap` are package-private, so a mismatch there surfaces on first use. It fails
+  closed, and the maker's owner-withdraw exit is unaffected either way.
+- A second guard over one account is possible. Only that account's owner can mint the caps for it,
+  so it is a maker's choice about their own money rather than something a third party can arrange —
+  which is why nothing here forbids it.
 
 ## 4. What the wrapper adds — only these three, DeepBook has none of them
 

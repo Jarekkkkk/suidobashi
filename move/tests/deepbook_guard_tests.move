@@ -163,6 +163,12 @@ fun the_guard_records_what_it_was_handed() {
         assert_eq!(deepbook_guard::trade_cap_id(&g), trade_cap_id);
         assert_eq!(deepbook_guard::is_paused(&g), false);
 
+        // Three capabilities, each its own object — the reason the 1,000-per-account ceiling is
+        // nowhere near this design.
+        assert!(deposit_cap_id != withdraw_cap_id);
+        assert!(withdraw_cap_id != trade_cap_id);
+        assert!(deposit_cap_id != trade_cap_id);
+
         let (price_min, price_max, max_qty) = deepbook_guard::bounds(&g);
         assert_eq!(price_min, PRICE_MIN);
         assert_eq!(price_max, PRICE_MAX);
@@ -627,5 +633,114 @@ fun the_new_operator_takes_over() {
         );
         ts::return_shared(g);
     };
+    s.end();
+}
+
+// === Isolation ===
+//
+// The claim under test: one account per guard, one set of capabilities per guard, no shared fund,
+// and no path that moves value between accounts. Most of it is enforced by DeepBook rather than by
+// this module, which is the point — it holds even if this code is wrong.
+//
+// DeepBook's error constants are private, so these tests name the abort code as a literal:
+// `0` is `EInvalidOwner` and `1` is `EInvalidTrader`, the allowlist refusal.
+
+/// Two accounts, both the same owner's, so the only thing wrong is the pairing. This is the one
+/// place the code could undercut the claim: nothing about a `TradeCap` at rest says which
+/// BalanceManager it belongs to, and before this check the mismatch would only surface when the
+/// strategy first tried to trade.
+#[test]
+#[expected_failure(abort_code = 1)]
+fun create_refuses_a_trade_cap_from_another_account() {
+    let mut s = ts::begin(ALICE);
+
+    let mut first = balance_manager::new(s.ctx());
+    let deposit_cap = balance_manager::mint_deposit_cap(&mut first, s.ctx());
+    let withdraw_cap = balance_manager::mint_withdraw_cap(&mut first, s.ctx());
+
+    let mut second = balance_manager::new(s.ctx());
+    let foreign_trade_cap = balance_manager::mint_trade_cap(&mut second, s.ctx());
+    transfer::public_transfer(second, ALICE);
+
+    let _ = deepbook_guard::create<TestBase, TestQuote>(
+        pool(),
+        first,
+        deposit_cap,
+        withdraw_cap,
+        foreign_trade_cap,
+        OPERATOR,
+        PRICE_MIN,
+        PRICE_MAX,
+        MAX_QTY,
+        s.ctx(),
+    );
+    s.end();
+}
+
+/// The isolation itself, enforced by DeepBook and not by us: a capability is welded to one
+/// account's allowlist, so a guard's own trade capability cannot be presented against any other
+/// account. Meaning no agent, however far it has gone rogue, can point one guard's authority at a
+/// different user's money.
+#[test]
+#[expected_failure(abort_code = 1)]
+fun a_guards_trade_cap_cannot_authorise_another_account() {
+    let mut s = ts::begin(ALICE);
+    let (guard_id, _) = setup_in_band(&mut s, OPERATOR);
+
+    let mut other_account = balance_manager::new(s.ctx());
+
+    s.next_tx(OPERATOR);
+    {
+        let g = take(&mut s, guard_id);
+        // The guard's stored capability, offered to an account that never listed it. The module
+        // never hands the capability out, so this hook is the only way to make the attempt.
+        deepbook_guard::generate_proof_for_testing(&g, &mut other_account, s.ctx());
+        transfer::public_transfer(other_account, ALICE);
+        ts::return_shared(g);
+    };
+    s.end();
+}
+
+/// What stops anyone arranging a shared fund: a second guard over one account can exist only
+/// because that account's owner minted the capabilities for it. Minting is owner-gated inside
+/// DeepBook, so an outsider cannot manufacture authority over an account it does not own.
+#[test]
+#[expected_failure(abort_code = 0)]
+fun a_stranger_cannot_mint_a_capability_for_another_account() {
+    let mut s = ts::begin(ALICE);
+    let (_, balance_manager_id) = setup_in_band(&mut s, OPERATOR);
+
+    s.next_tx(STRANGER);
+    {
+        let mut bm = ts::take_shared_by_id<BalanceManager>(&s, balance_manager_id);
+        let cap = balance_manager::mint_trade_cap(&mut bm, s.ctx());
+        transfer::public_transfer(cap, STRANGER);
+        ts::return_shared(bm);
+    };
+    s.end();
+}
+
+/// The two capabilities `create` cannot check are still checked — by DeepBook, on first use. Its
+/// validators for these take the same allowlist route as the trade capability; they are simply not
+/// reachable from outside the package, so the refusal lands at the deposit rather than at creation.
+/// A later gate, not a hole.
+#[test]
+#[expected_failure(abort_code = 1)]
+fun a_foreign_deposit_cap_is_refused_by_deepbook_on_use() {
+    let mut s = ts::begin(ALICE);
+
+    let mut account = balance_manager::new(s.ctx());
+    let mut other_account = balance_manager::new(s.ctx());
+    let foreign_deposit_cap = balance_manager::mint_deposit_cap(&mut other_account, s.ctx());
+
+    balance_manager::deposit_with_cap<TestCoin>(
+        &mut account,
+        &foreign_deposit_cap,
+        coin::mint_for_testing<TestCoin>(1_000, s.ctx()),
+        s.ctx(),
+    );
+    transfer::public_transfer(foreign_deposit_cap, ALICE);
+    transfer::public_transfer(other_account, ALICE);
+    transfer::public_transfer(account, ALICE);
     s.end();
 }

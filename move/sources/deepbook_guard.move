@@ -17,6 +17,24 @@
 /// steal, and its reach on each user's capital is the band, the per-order bound and the pause
 /// that user set. Five guards mean five sets of limits, not one shared account.
 ///
+/// Isolation is structural, not enforced here. A guard reaches exactly one BalanceManager — the
+/// one it recorded — and every order asserts that id, while DeepBook settles only against the
+/// account the proof names, and the proof can only come from a capability in that account's own
+/// allowlist. Nothing in this module can move value between accounts: the only functions that
+/// move money are DeepBook's, and they answer to DeepBook's allowlist rather than to us.
+///
+/// Two boundaries are worth knowing. A capability is one-to-one with a BalanceManager, but one
+/// account can hold up to 1,000 of them, so a single account can back roughly 330 guards at three
+/// capabilities each — and two guards over one account do share that account's funds. Only the
+/// account's owner can mint, so that state is a maker's own choice about their own money and
+/// never something a third party can arrange.
+///
+/// The trade capability is verified at creation, by attempting the proof every order would need:
+/// Move cannot catch an abort, so the check IS the call, and a mismatched pair is refused rather
+/// than left to produce a guard whose every order aborts. DeepBook's validators for the deposit
+/// and withdraw capabilities are package-private, so those two cannot be checked the same way and
+/// are refused on first use instead.
+///
 /// What the bounds do and do not do. They cap each order's price and size, so no single order
 /// can reach outside the band, and a paused guard places none at all. They do not cap the total:
 /// an agent can place many orders, and the ceiling on the whole thing is the BalanceManager's
@@ -119,7 +137,7 @@ public struct GuardUpdated has copy, drop {
 /// capabilities is to already own them.
 public fun create<Base, Quote>(
     pool_id: ID,
-    balance_manager: BalanceManager,
+    mut balance_manager: BalanceManager,
     deposit_cap: DepositCap,
     withdraw_cap: WithdrawCap,
     trade_cap: TradeCap,
@@ -132,6 +150,10 @@ public fun create<Base, Quote>(
     assert!(price_min <= price_max, EPriceBandInverted);
 
     let balance_manager_id = object::id(&balance_manager);
+
+    // Refuse a pairing that would leave the guard unable to do the one thing it exists for. The
+    // deposit and withdraw capabilities cannot be checked here; see the module note.
+    assert_trade_cap_belongs(&mut balance_manager, &trade_cap, ctx);
     // `public_share_object`, not `share_object`: the BalanceManager is DeepBook's type, and the
     // private form is restricted to its own module. It has `store`, so this is the permitted
     // path — and sharing is what lets the agent's transaction reference a BalanceManager it does
@@ -377,6 +399,19 @@ fun assert_caller_is_maker<Base, Quote>(
     ctx: &TxContext,
 ) {
     assert!(ctx.sender() == guard.maker, ENotMaker);
+}
+
+/// Prove the trade capability belongs to this BalanceManager, by attempting the proof every order
+/// would need. DeepBook checks membership of the account's allowlist, and Move cannot catch an
+/// abort — so the check IS the call. Without it a mismatched pair would create a guard whose every
+/// agent path aborts inside DeepBook, a fault discovered only when the strategy first tried to
+/// trade.
+fun assert_trade_cap_belongs(
+    balance_manager: &mut BalanceManager,
+    trade_cap: &TradeCap,
+    ctx: &TxContext,
+) {
+    let _proof = balance_manager::generate_proof_as_trader(balance_manager, trade_cap, ctx);
 }
 
 fun emit_updated<Base, Quote>(guard: &DeepbookGuard<Base, Quote>) {

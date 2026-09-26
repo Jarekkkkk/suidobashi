@@ -602,6 +602,18 @@ A single-value return drops fine, so the error only appears on the helpers that 
 which is exactly the shape a setup helper has, and exactly where a test wants to ignore both
 halves.
 
+**An `expected_failure` test must still consume every owned object on the path it never reaches.**
+`let _ = expr` does not discard a value without `drop`, and an owned object still alive at `s.end()`
+is a compile error — so an abort test has to consume the objects the abort would have skipped, on
+lines the VM never executes. Two compile cycles on the guard tests, both in tests that were correct
+by design. Bind the value and transfer it, or transfer it before the call.
+
+**DeepBook's abort codes are private, so a test must name the literal.** `EInvalidTrader` and its
+neighbours are plain private constants in `deepbook::balance_manager`, unreachable from a dependent
+package's tests. `#[expected_failure(abort_code = 1)]` with a comment saying which constant it is
+is the only form available; reading the source is how the number gets known. 0 is `EInvalidOwner`,
+1 is `EInvalidTrader`.
+
 ## Mainnet feature flags (protocol 136, read from the node)
 
 ```text
