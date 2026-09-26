@@ -27,6 +27,7 @@ import {
   DEEPBOOK_TICK_SIZE,
   buyTx,
   cancelTx,
+  sellTx,
   sharedVersionOf,
   type OrderRefs,
 } from './deepbook.js';
@@ -43,6 +44,7 @@ const GUARD = flag('--guard');
 const BM = flag('--bm');
 const LEVELS = Number(flag('--levels', '5'));
 const QUANTITY = BigInt(flag('--quantity-raw', '1000000000'));
+const SIDE = flag('--side', 'bid') as 'bid' | 'ask';
 const EXECUTE = has('--execute');
 
 if (!GUARD || !BM) {
@@ -184,7 +186,7 @@ async function main() {
   };
 
   const plan = planGrid({
-    guard, book, open, operator: guard.agent, levels: LEVELS, quantity: QUANTITY,
+    guard, book, open, operator: guard.agent, levels: LEVELS, quantity: QUANTITY, side: SIDE,
   });
 
   if (plan.refused !== null) {
@@ -211,12 +213,16 @@ async function main() {
   const tx = new Transaction();
   for (const orderId of plan.cancel) cancelTx(tx, refs, orderId);
   for (const level of plan.place) {
-    buyTx(tx, refs, {
+    const call = {
       clientOrderId: BigInt(Date.now()),
-      orderType: 3, // POST_ONLY: a grid level must rest, never cross
+      orderType: 3, // POST_ONLY: a grid level must REST, never cross
       price: level.price,
       quantity: level.quantity,
-    });
+    };
+    // Which side it rests on is decided by what the account is funded in, which is why the plan
+    // carries its own side rather than the caller assuming one.
+    if (plan.side === 'ask') sellTx(tx, refs, call);
+    else buyTx(tx, refs, call);
   }
 
   const { signer, keyName } = await signerForSeat(guard.agent);

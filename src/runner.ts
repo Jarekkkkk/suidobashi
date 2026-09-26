@@ -50,7 +50,9 @@ export type OpenOrder = {
 };
 
 export type Plan = {
-  /** Bids to place, ascending. Empty when nothing is needed — including when the plan was refused. */
+  /** Which side the ladder sits on. A bid ladder needs quote funds; an ask ladder needs base. */
+  side: 'bid' | 'ask';
+  /** Levels to place, ascending. Empty when nothing is needed — including when refused. */
   place: GridLevel[];
   /** Order ids to cancel, because they are no longer on the ladder. */
   cancel: bigint[];
@@ -59,8 +61,8 @@ export type Plan = {
 };
 
 /** A plan that does nothing, for the several ways a runner should stand down. */
-function stoodDown(reason: string, cancel: bigint[] = []): Plan {
-  return { place: [], cancel, refused: reason };
+function stoodDown(side: 'bid' | 'ask', reason: string, cancel: bigint[] = []): Plan {
+  return { side, place: [], cancel, refused: reason };
 }
 
 /**
@@ -77,25 +79,37 @@ export function planGrid(opts: {
   operator: string;
   levels: number;
   quantity: bigint;
+  /**
+   * Defaults to a bid ladder. An ask ladder exists because an account holds one side and not the
+   * other: DeepBook pays an order out of the BalanceManager, so a bid needs quote funds and an ask
+   * needs base. A runner that could only bid cannot act on an account funded in SUI.
+   */
+  side?: 'bid' | 'ask';
 }): Plan {
   const { guard, book, open, operator, levels, quantity } = opts;
+  const side = opts.side ?? 'bid';
 
-  if (guard.paused) return stoodDown('the guard is paused, so nothing may be quoted');
+  if (guard.paused) return stoodDown(side, 'the guard is paused, so nothing may be quoted');
   if (guard.agent.toLowerCase() !== operator.toLowerCase()) {
-    return stoodDown('this runner does not hold the seat on this guard');
+    return stoodDown(side, 'this runner does not hold the seat on this guard');
   }
 
-  // A bid at or above the best ask crosses, and a crossing order pays taker fees and can fill
-  // immediately at a price the grid did not choose. Capping the ladder at the best BID — never the
-  // ask — is what keeps every level a maker order. The band can still be wider; the market decides
-  // which part of it is quotable right now.
-  const ceiling = min(guard.priceMax, book.bestBid);
-  if (ceiling < guard.priceMin) {
-    return stoodDown('the market is below the band, so no level in it can rest');
+  // Never cross, in EITHER direction: a bid must sit below the best ask, and an ask above the best
+  // bid. Capping at the same side's own best price is what guarantees it, and it is the rule that
+  // keeps every level a maker order — no taker fee, and no fill at a price the grid did not choose.
+  const floor = side === 'bid' ? guard.priceMin : max(guard.priceMin, book.bestAsk);
+  const ceiling = side === 'bid' ? min(guard.priceMax, book.bestBid) : guard.priceMax;
+  if (ceiling < floor) {
+    return stoodDown(
+      side,
+      side === 'bid'
+        ? 'the market is below the band, so no level in it can rest'
+        : 'the market is above the band, so no level in it can rest',
+    );
   }
 
   const desired = gridLevels({
-    lower: guard.priceMin,
+    lower: floor,
     upper: ceiling,
     levels,
     tick: book.tick,
@@ -114,31 +128,39 @@ export function planGrid(opts: {
   // Orders already open are still cancelled when a fresh ladder is refused — a ladder that cannot
   // be placed is a reason to stand down, not a reason to leave stale quotes resting.
   if (refusal !== null) {
-    return stoodDown(refusal, bidsOffTheLadder(open, []));
+    return stoodDown(side, refusal, ordersOffTheLadder(open, [], side));
   }
 
-  const onLadder = new Set(desired.map((l) => String(l.price)));
-  const cancel = bidsOffTheLadder(open, desired);
-  // Placing only what is missing is what makes a pass idempotent. A price that already has a bid is
-  // left alone — including one the runner itself placed a minute ago.
-  const place = desired.filter((l) => !open.some((o) => o.isBid && o.price === l.price));
+  const cancel = ordersOffTheLadder(open, desired, side);
+  // Placing only what is missing is what makes a pass idempotent. A price that already has an order
+  // is left alone — including one the runner itself placed a minute ago.
+  const place = desired.filter((l) => !open.some((o) => o.price === l.price));
 
-  return { place, cancel, refused: null };
+  return { side, place, cancel, refused: null };
 }
 
 /**
- * Bids to cancel: everything resting that is not a ladder price.
+ * Orders to cancel: everything resting on this plan's side that is not a ladder price.
  *
- * Sells are left alone, deliberately. The example runner never places one, so any sell that exists
- * belongs to somebody else's decision — the maker unwinding by hand, say — and cancelling it would
- * be this runner reaching outside its brief.
+ * The other side is left alone, deliberately. A bid ladder never places asks, so an ask that exists
+ * belongs to somebody else's decision — a maker unwinding by hand, say — and cancelling it would be
+ * this runner reaching outside its brief.
+ *
+ * NOTE the reader's limit: `src/run-grid.ts` reads open orders WITHOUT their side, so it marks them
+ * all as bids. A bid ladder therefore cancels correctly, and an ask ladder cannot yet tell its own
+ * orders from a bid's. Reading each order's side and price is the fix, and it is not written.
  */
-function bidsOffTheLadder(open: OpenOrder[], desired: GridLevel[]): bigint[] {
+function ordersOffTheLadder(open: OpenOrder[], desired: GridLevel[], side: 'bid' | 'ask'): bigint[] {
   const onLadder = new Set(desired.map((l) => String(l.price)));
-  return open.flatMap((o) => (o.isBid && !onLadder.has(String(o.price)) ? [o.orderId] : []));
+  const mine = side === 'bid';
+  return open.flatMap((o) => (o.isBid === mine && !onLadder.has(String(o.price)) ? [o.orderId] : []));
 }
 
 /** BigInt comparison, because `Math.min` is typed for numbers and these are raw integers. */
 function min(a: bigint, b: bigint): bigint {
   return a < b ? a : b;
+}
+
+function max(a: bigint, b: bigint): bigint {
+  return a > b ? a : b;
 }
