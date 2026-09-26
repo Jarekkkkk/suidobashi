@@ -48,6 +48,14 @@ export type BuildResult = {
   error?: string;
   refused?: { validation?: { reason?: string } };
   events?: Event[];
+  /**
+   * The terms of what is about to be signed, as the server describes them.
+   *
+   * Shape varies by action — an escrow carries `escrowSui`, `minOutUsdc` and `feeOutUsdc`,
+   * while a burn carries only `orderId` — so it is read as display pairs rather than a
+   * typed struct. Values arrive as strings, already decimal rather than in base units.
+   */
+  proposal?: Record<string, unknown>;
 };
 
 export type SubmitResult = {
@@ -65,4 +73,4 @@ export type SubmitResult = {
  * "0.010000" in the chat: two implementations, two spellings, one value. Re-exported rather
  * than reimplemented, so there is still one place to change and no second copy to drift.
  */
-export { fromUnits } from '../../units.js';
+export { fromUnits } from '../../units';
