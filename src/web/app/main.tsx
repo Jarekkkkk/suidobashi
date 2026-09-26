@@ -207,7 +207,10 @@ function App() {
       {/* Left — what is installed, and what is left over. Its own surface, so it reads as a
           region of the app rather than as a box with a border. */}
       <aside className={cn(
-        'hidden w-[260px] shrink-0 flex-col border-r border-border bg-sidebar',
+        // Wider than it was (260): the talent cards are the widest thing in here — a name, a version,
+        // two actions, then a fixed 68px label column beside a mono id and a sentence — and at 260
+        // there was about 140px left for that last pair. One number, tunable.
+        'hidden w-[320px] shrink-0 flex-col border-r border-border bg-sidebar',
         'md:flex',
       )}>
         <LeftPane

@@ -1523,6 +1523,18 @@ const server = http.createServer((req, res) => {
     }
   }
 
+  if (req.method === 'GET' && req.url === '/mask-shape-5.svg') {
+    // The avatar mask: the theme's shape 5, which is a soft-edged blob (its source SVG carries an
+    // feGaussianBlur, so `mask-image` keeps the feather and `clip-path` would not). A literal path
+    // like the texture's, and an SVG, so it is 904 bytes and resolution-free.
+    try {
+      const file: Uint8Array = fs.readFileSync('src/web/app/mask-shape-5.svg');
+      return send(200, file, 'image/svg+xml');
+    } catch {
+      return send(404, 'no mask', 'text/plain; charset=utf-8');
+    }
+  }
+
   if (req.method === 'GET' && req.url === '/suidobashi.jpg') {
     // The home page's hero — Suidobashi, for the name. A literal path like the texture's, so the
     // request cannot steer the read out of src/web/app/. Served at 1536×1024 (re-encoded from the

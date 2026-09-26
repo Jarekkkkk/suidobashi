@@ -36,7 +36,7 @@ export function Home({ ready, note, onConnect }: {
             {/* The theme's mark: a small primary tile with a round avatar overhanging it. The
                 avatar is deliberately larger than the tile — that overhang is the shape. */}
             <div className="flex size-6 items-center justify-center rounded-md bg-primary text-primary-foreground">
-              <SourceAvatar source="wallet" size={32} />
+              <SourceAvatar source="wallet" size={36} />
             </div>
             suidobashi
           </div>

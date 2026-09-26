@@ -408,7 +408,7 @@ export function LeftPane({
           one of them is pressed often. The menu opens UPWARD — a dropdown below the last row of a
           full-height pane has nowhere to go. */}
       <div ref={menuRef} className="relative flex shrink-0 items-center gap-2 border-t border-border p-2">
-        <SourceAvatar source="wallet" size={22} />
+        <SourceAvatar source="wallet" />
         <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground">
           {address ? short(address) : 'not connected'}
         </span>

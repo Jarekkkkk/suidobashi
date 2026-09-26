@@ -15,19 +15,52 @@
  * than a hash — a source that changed face between renders would be worse than no avatar.
  *
  * THE IMAGES ARE SERVED FROM OUR OWN ORIGIN (`/icons/<name>.png`, see ui.ts) and are 256×256. They
- * are shown at 14–22px, so the 1254×1254 originals were ~90× more pixels than any render can use;
+ * are shown at 20–36px, so the 1254×1254 originals were ~90× more pixels than any render can use;
  * the tree keeps the ~75 KB versions rather than the 4.6 MB set. Vendored art, not fetched at page
  * load — the same rule as the fonts, the texture and the wallet bundle.
+ *
+ * pink.png IS NOW UNREFERENCED, kept because it was downloaded deliberately and is one line away
+ * from being a fifth identity.
  */
 import { cn } from '@/lib/utils';
 
-/** Which illustration each identity wears: the four event sources, and the wallet's own face. */
+/**
+ * Which illustration each identity wears.
+ *
+ * `you` AND `wallet` ARE DELIBERATELY THE SAME FACE: they are the same person. The footer and the
+ * home page draw the account, and the transcript draws the person who typed the request — showing
+ * two different faces for one human made the app look like it had a participant nobody could
+ * identify. Blue was already the account's, so the user's turn took it and pink fell out of use.
+ */
 const FACE: Record<string, string> = {
-  you: 'pink',
+  you: 'blue',
   model: 'blonde',
   pipeline: 'black',
   chain: 'teal',
   wallet: 'blue',
+};
+
+/**
+ * THE SHAPE IS A MASK, NOT A CLIP — and that distinction is the whole reason for the file.
+ *
+ * The theme's shape 5 is a soft-edged blob: its own SVG carries an `feGaussianBlur`, so its alpha
+ * feathers at the edge. `clip-path` is a HARD cut and would throw the feather away, leaving a
+ * sticker. `mask-image` keeps the alpha gradient, which is what makes it read as watercolour.
+ *
+ * Served from our own origin like every other asset here — the fonts, the texture, the hero and
+ * the five faces — so nothing about how the app looks depends on a CDN being reachable.
+ */
+const MASK = '/mask-shape-5.svg';
+const MASK_STYLE: React.CSSProperties = {
+  maskImage: `url(${MASK})`,
+  maskSize: '100% 100%',
+  maskRepeat: 'no-repeat',
+  maskPosition: 'center',
+  // Safari needs the prefix; Chrome ignores it. Both are here rather than a browser sniff.
+  WebkitMaskImage: `url(${MASK})`,
+  WebkitMaskSize: '100% 100%',
+  WebkitMaskRepeat: 'no-repeat',
+  WebkitMaskPosition: 'center',
 };
 
 /**
@@ -37,7 +70,7 @@ const FACE: Record<string, string> = {
  * where a participant should be is worse than rendering the wrong one — the colour and the source
  * label still say who it is.
  */
-export function SourceAvatar({ source, size = 22, className }: {
+export function SourceAvatar({ source, size = 28, className }: {
   source: string; size?: number; className?: string;
 }) {
   return (
@@ -46,12 +79,13 @@ export function SourceAvatar({ source, size = 22, className }: {
       width={size}
       height={size}
       // Decorative: the transcript names the source in the bubble's own text and colour, so a
-      // screen reader announcing "pink" would be noise. Matches what the old avatar did.
+      // screen reader announcing "pink" would be noise.
       alt=""
       aria-hidden
-      // One rule for art with and without an alpha channel: two of the five carry transparency and
-      // three do not, and clipping to a circle makes them the same shape either way.
-      className={cn('shrink-0 rounded-full object-cover', className)}
+      // The shape comes from the mask, so there is no border radius here — and `object-cover`
+      // keeps one rule for art with and without an alpha channel.
+      style={MASK_STYLE}
+      className={cn('shrink-0 object-cover', className)}
     />
   );
 }

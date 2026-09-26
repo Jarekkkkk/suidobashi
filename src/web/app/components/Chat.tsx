@@ -325,12 +325,15 @@ export function Chat({
               if (hidden && PROGRESS_KINDS.has(e.kind) && i < lastTerminal) return null;
 
               if (!said) {
+                // NO FACE ON A STEP. The transcript was drawing an avatar on a thinking row AND on
+                // the answer's bubble, so one response appeared to come from two speakers. The face
+                // belongs on the bubble; a step is the same speaker mid-sentence.
+                //
+                // `pl-[30px]` is the bubble's own offset — its face (20) plus the row's gap (10) —
+                // so a step's text lines up under the answer it belongs to instead of hanging out
+                // to the left of it.
                 return (
-                  <div
-                    key={i}
-                    className="animate-fade-in flex items-center gap-2.5 py-0.5 pl-1"
-                  >
-                    <SourceAvatar source={e.source} size={14} />
+                  <div key={i} className="animate-fade-in py-0.5 pl-[30px]">
                     <span className="min-w-0 whitespace-pre-line break-words text-[12px] leading-relaxed text-muted-foreground">
                       {e.text}
                     </span>
@@ -342,16 +345,29 @@ export function Chat({
                 <div
                   key={i}
                   className={cn(
-                    'flex w-full',
-                    isAsk ? 'justify-end' : 'justify-start',
+                    // `items-start` puts the face level with the bubble's FIRST line, which is what
+                    // chat usually does with a long message. NO `justify-*`: the row is FLIPPED
+                    // instead, so the same DOM order — face, then bubble — puts the face on the
+                    // right for the user and on the left for everybody else, and the bubble always
+                    // keeps its speaker beside it.
+                    'flex w-full items-start gap-2.5',
+                    isAsk && 'flex-row-reverse',
                     // Arrives from the side it belongs to.
                     isAsk ? 'animate-send-in' : 'animate-receive-in',
                     i > 0 && 'mt-1.5',
                   )}
                 >
+                  {/* THE FACE SITS ON THE SIDE THE WORDS DO. A user's prompt is `you`; everything
+                      else carries its own source, so a refusal looks like the pipeline and a
+                      settled fill looks like the chain — the same identity the progress rows use. */}
+                  <SourceAvatar source={isAsk ? 'you' : e.source} size={20} />
+
                   <Bubble
-                    align={isAsk ? 'end' : 'start'}
-                    // What each source IS, not just what it is called. The creature says WHO is
+                    // `align` is deliberately NOT passed: its `self-start` is the vertical axis in
+                    // a row, so the default already puts the bubble level with the face's top. It
+                    // was previously given a value derived from `isAsk`, which in a one-item row
+                    // could not do anything either way.
+                    // What each source IS, not just what it is called. The face says WHO is
                     // talking; this says their standing — advisory, unconfirmed, or a fact.
                     title={isAsk ? 'you asked this' : SOURCE_TITLE[e.source]}
                     // The user's own words are the strong surface; an outcome is neutral, because a
