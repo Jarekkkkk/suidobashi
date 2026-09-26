@@ -17,3 +17,6 @@ move/build/
 # move/Published.toml is the real record of what is deployed.
 Pub.*.toml
 
+
+# Local conversations and installed talents. Never committed: it is this machine's state.
+data/

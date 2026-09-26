@@ -25,6 +25,10 @@ import { VAULT_ID, DEPLOYER, USDC_TYPE, REWARD_TYPE, PACKAGE_LATEST_ID, POOL_TIC
 import { HIRES } from './hires.js';
 import { findCreatedGuard, repointAddresses } from './guard-id.js';
 import { event, endingFor, type EventKind } from './web/events.js';
+import {
+  listChats, createChat, getChat, deleteChat, messages, append,
+  listTalents, installTalent, uninstallTalent, dbPath,
+} from './db.js';
 import { unitsToUsdc } from './web/units.js';
 
 const PORT = Number(process.env.UI_PORT ?? 8788);
@@ -1435,6 +1439,90 @@ const server = http.createServer((req, res) => {
 
   if (req.method === 'GET' && req.url === '/api/state') {
     return state().then((s) => send(200, JSON.stringify(s))).catch((e) => send(500, JSON.stringify({ error: errText(e) })));
+  }
+
+  if ((req.url ?? '').startsWith('/api/chats')) {
+    // Parsed by hand rather than with a router: five routes, one shape, and a dependency for
+    // this would be more code than it replaces.
+    const parts = (req.url ?? '').split('?')[0].split('/').filter(Boolean); // ['api','chats',id?]
+    const id = parts[2];
+
+    if (req.method === 'GET' && !id) {
+      return send(200, JSON.stringify({ chats: listChats(), db: dbPath }));
+    }
+    if (req.method === 'POST' && !id) {
+      let raw = '';
+      req.on('data', (c) => { raw += c; if (raw.length > 8192) req.destroy(); });
+      req.on('end', () => {
+        let title = 'new chat';
+        try {
+          const body = JSON.parse(raw || '{}');
+          if (typeof body.title === 'string' && body.title.trim()) title = body.title.trim().slice(0, 80);
+        } catch { /* a missing body just means the default title */ }
+        return send(200, JSON.stringify(createChat(title)));
+      });
+      return;
+    }
+    if (req.method === 'GET' && id) {
+      const chat = getChat(id);
+      if (!chat) return send(404, JSON.stringify({ error: 'no such chat' }));
+      return send(200, JSON.stringify({ chat, messages: messages(id) }));
+    }
+    if (req.method === 'POST' && id) {
+      let raw = '';
+      req.on('data', (c) => { raw += c; if (raw.length > 65536) req.destroy(); });
+      req.on('end', () => {
+        let role: any = 'pipeline', text = '';
+        try {
+          const body = JSON.parse(raw || '{}');
+          role = body.role ?? role;
+          text = String(body.text ?? '');
+        } catch {
+          return send(400, JSON.stringify({ error: 'bad body' }));
+        }
+        if (!text) return send(400, JSON.stringify({ error: 'text required' }));
+        return send(200, JSON.stringify(append(id, role, text)));
+      });
+      return;
+    }
+    if (req.method === 'DELETE' && id) {
+      deleteChat(id);
+      return send(200, JSON.stringify({ ok: true }));
+    }
+  }
+
+  if ((req.url ?? '').startsWith('/api/talents')) {
+    const parts = (req.url ?? '').split('?')[0].split('/').filter(Boolean);
+    const id = parts[2];
+
+    if (req.method === 'GET' && !id) {
+      return send(200, JSON.stringify({ talents: listTalents() }));
+    }
+    if (req.method === 'POST' && id) {
+      // INSTALLING IS OFF-CHAIN: it stores what the talent exposes so the local model can be
+      // equipped with it. A talent that spends ALSO needs an on-chain grant, and that is a
+      // separate act with its own signature — one is a download, the other is a permission.
+      let raw = '';
+      req.on('data', (c) => { raw += c; if (raw.length > 65536) req.destroy(); });
+      req.on('end', () => {
+        let name = id, manifest: unknown = {}, prompt: string | null = null;
+        try {
+          const body = JSON.parse(raw || '{}');
+          if (typeof body.name === 'string') name = body.name;
+          if (body.manifest) manifest = body.manifest;
+          if (typeof body.prompt === 'string') prompt = body.prompt;
+        } catch {
+          return send(400, JSON.stringify({ error: 'bad body' }));
+        }
+        installTalent(id, name, manifest, prompt);
+        return send(200, JSON.stringify({ ok: true, id }));
+      });
+      return;
+    }
+    if (req.method === 'DELETE' && id) {
+      uninstallTalent(id);
+      return send(200, JSON.stringify({ ok: true }));
+    }
   }
 
   if (req.method === 'GET' && req.url === '/api/outstanding') {

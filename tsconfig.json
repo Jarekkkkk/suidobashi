@@ -1,7 +1,11 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
@@ -12,12 +16,21 @@
     "forceConsistentCasingInFileNames": true,
     "allowJs": true,
     "checkJs": false,
-    "types": ["node"],
+    "types": [
+      "node",
+      "bun"
+    ],
     "paths": {
-      "@/*": ["./src/web/app/*"]
+      "@/*": [
+        "./src/web/app/*"
+      ]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.js"],
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "src/**/*.js"
+  ],
   "exclude": [
     "src/verify-*.js",
     "src/demo-*.js",
