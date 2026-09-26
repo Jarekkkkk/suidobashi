@@ -160,6 +160,16 @@ the agent paths `buy`/`sell`/`cancel`/`cancel_all`. The maker's capital paths �
 `withdraw`, `stop`, `redeem` — are the remaining steps. `stop` is `set_paused(true)` plus the
 `cancel_all_orders` that a paused agent can no longer do for it.
 
+On the caller's side, `src/deepbook.ts` holds the pinned DeepBook constants, the grid arithmetic
+(`gridLevels`), the same four refusals the guard makes (`refusalFor`, each naming the Move assert it
+mirrors), and `buildCreateAccount` — the BalanceManager plus its three capabilities, which touches
+only DeepBook's published package and therefore **simulates on mainnet today**
+(`src/verify-deepbook.js`, 21 checks, in the `bun run verify` chain).
+
+The order paths are deliberately not built there yet: they call our guard module, so until it is
+published they would be dead code that cannot be run even once. They belong in the publish change,
+together with the home-pane flow.
+
 Where the code diverges from this plan, and why:
 
 - The pause primitive is `set_paused(bool)` rather than a `stop`/`resume` pair: stopping is a maker
@@ -188,9 +198,16 @@ Not yet verified, stated as unverified: whether several `place_limit_order` comm
 on the same Pool/wrapper within **one PTB** (DeepBook's SDK batches orders, this repo has not tried
 it). If not, the grid is one order per transaction. Decide by running one dry-run tx, not by reading.
 
-Raw tick/lot/min for the pool are not in its top-level JSON (state sits in a dynamic field); the
-docs' table says tick `0.00001`, lot `0.1` for SUI/USDC. Must be read from chain at implementation
-time — this is the same class of unit error that produced the thousandfold bug in the amount parser.
+The pool's tick size and price scale are now MEASURED rather than assumed, and checked against the
+chain on every `bun run verify`: a live `get_level2_ticks_from_mid` gives level gaps that are all
+multiples of 10, and a mid of 1.16 USDC per SUI, which fixes the price scale at 1e6 and the tick at
+10 — the `0.00001` the contract table lists. Neither is in the pool's top-level JSON, so this was
+read out of a simulation, not out of a field.
+
+**The quantity scale is still open**, and it is the one number that could produce the thousandfold
+error this section used to warn about in general. A live read's per-level quantities are not
+multiples of the documented 0.1 SUI lot under any scale tried; the evidence is in NOTES.md and
+`quantityScale` is marked UNVERIFIED. Settling it needs one real order, which needs the publish.
 
 ## 7. Three flavors of "help others"
 

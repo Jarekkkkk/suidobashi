@@ -621,6 +621,19 @@ Programmability needs the gate to become a *presented capability* (an `AgentCap`
 an address, which is a different trust shape: today there is nothing at the operator to steal, and
 a capability is precisely a stealable thing. Written down before anyone builds it twice.
 
+**DeepBook's per-level quantities disagree with the documented lot size, and one read cannot say
+why.** A live `get_level2_ticks_from_mid` on the SUI/USDC pool returns bid levels whose gaps are all
+multiples of 10 — the documented `0.00001` tick at this pool's 1e6 price scale, so the PRICE side
+checks out — with best bid/ask of `1_159_960` / `1_160_080`, i.e. 1.16 USDC per SUI. The QUANTITY
+side does not. Sampled per-level quantities of `864_000_000_000`, `4_318_600_000_000` and
+`216_000_000_000` are not multiples of the documented 0.1 SUI lot (1e8) under that scale, nor under
+1e9-per-token, nor under 1e6. Two readings, one source, and a read cannot say which is wrong.
+
+Settle it with one order that must align: ask for exactly 0.1 SUI and see whether DeepBook refuses
+it, then read the quantity back. That needs the guard module published, so it is blocked on the
+publish. Until then `quantityScale` in `src/deepbook.ts` is marked UNVERIFIED and
+`src/verify-deepbook.js` prints the numbers instead of asserting them.
+
 ## Mainnet feature flags (protocol 136, read from the node)
 
 ```text
