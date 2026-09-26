@@ -72,11 +72,25 @@ export async function signAndSubmit(
   // says nothing about which step produced it, and the only way to find out was to reason
   // about it. Naming the step, and carrying the first stack frame, makes the next report
   // answer the question instead of prompting another guess.
+  //
+  // THE FRAME IS FOR FAILURES, NOT FOR DECISIONS. See the branch below.
   let signed;
   try {
     signed = await w.sign(built.bytes);
   } catch (e) {
     const err = e instanceof Error ? e : new Error(String(e));
+
+    // A DECLINED SIGNATURE IS ROUTINE, and it arrived wearing a stack frame from inside the
+    // extension: "User rejected the request. — at X.from (chrome-extension://…)". That says
+    // nothing to the person who just clicked Cancel — they changed their mind, which is not a
+    // failure and should not read like one.
+    //
+    // The frame stays for everything else. It is what made the `owner` bug findable after five
+    // rounds of theorising, and dropping it wholesale would cost that again.
+    if (/reject|denied|cancel/i.test(err.message)) {
+      throw new Error('User rejected the signature request');
+    }
+
     const frame = (err.stack ?? '').split('\n')[1]?.trim() ?? 'no stack';
     throw new Error(`the wallet refused to sign: ${err.message} — ${frame}`);
   }
