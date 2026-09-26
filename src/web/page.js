@@ -264,6 +264,22 @@ async function ownerAction(kind, body) {
       adopted = ` — now using guard ${g.id.slice(0, 10)}…`
         + (g.persisted ? '' : ' (in memory only — src/addresses.js was NOT updated)');
     }
+
+    // An order lives a minute, so it is handed to the MCP server the moment it exists.
+    // Relaying the id by hand cannot fit inside that window, which is the whole reason
+    // this step is automatic rather than a button.
+    if (kind === 'order') {
+      say('order created — asking the mcp server to fill it…', 'warn');
+      const f = await api('/api/fill', { digest: out.digest });
+      const which = f.orderId ? `order ${f.orderId.slice(0, 10)}… ` : '';
+      return say(
+        f.filled
+          ? `filled — ${f.digest} · fee ${f.fee} to the filler · ${which}`
+          : `${which}not filled: ${f.why}. It expires shortly, and anyone may refund it to you.`,
+        f.filled ? 'ok' : 'warn',
+      );
+    }
+
     return say(`${kind}: ${out.status} — ${out.digest}${adopted}`,
       out.status === 'Success' ? 'ok' : 'bad');
   } catch (e) {

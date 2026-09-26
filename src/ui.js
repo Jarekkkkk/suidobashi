@@ -27,6 +27,9 @@ import { findCreatedGuard, repointAddresses } from './guard-id.js';
 
 const PORT = Number(process.env.UI_PORT ?? 8788);
 const HOST = process.env.UI_HOST ?? '127.0.0.1';
+/** Where the reference MCP server listens, for the fill notification. */
+const MCP_HOST = process.env.MCP_HOST ?? '127.0.0.1';
+const MCP_PORT = Number(process.env.MCP_PORT ?? 8790);
 
 /**
  * Refuse to listen anywhere but loopback unless explicitly forced. This page can
@@ -489,6 +492,27 @@ function explainAbort(message) {
 }
 
 /**
+ * The order a create transaction minted, read from its effects.
+ *
+ * Needed because an order id is generated on chain, so the browser cannot know it —
+ * and the MCP server has to be told inside the order's window. With a one-minute
+ * default that notification cannot be a person relaying a digest.
+ */
+function findCreatedOrder(digest) {
+  const r = spawnSync('sui', ['client', 'tx-block', digest, '--json'],
+    { encoding: 'utf-8', timeout: 120_000 });
+  let doc;
+  try {
+    doc = JSON.parse(r.stdout || '');
+  } catch {
+    return null;
+  }
+  const created = (doc.objectChanges || []).find((c) => c.type === 'created'
+    && String(c.objectType || '').includes('::order::Order<'));
+  return created?.objectId ?? null;
+}
+
+/**
  * Build the transaction and hold the bytes. No key, no signature, no submission —
  * `tx.build({ client })` runs a resolution pass that simulates, so a doomed
  * transaction fails here rather than after the user has approved it.
@@ -805,6 +829,47 @@ const server = http.createServer((req, res) => {
         return send(out.error ? 400 : 200, JSON.stringify(out));
       } catch (e) {
         return send(500, JSON.stringify({ error: String(e?.message || e) }));
+      }
+    });
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/api/fill') {
+    // Tell the MCP server about an order the browser just created. The browser cannot
+    // know the order id — it is generated on chain — so the digest comes here and the
+    // id is read from its effects.
+    //
+    // Everything returns 200 with a reason rather than an error code: "nobody filled
+    // it" is a normal outcome for a one-minute order, not a transport failure, and the
+    // UI should be able to say so plainly.
+    let raw = '';
+    req.on('data', (c) => { raw += c; if (raw.length > 8192) req.destroy(); });
+    req.on('end', async () => {
+      let digest;
+      try {
+        ({ digest } = JSON.parse(raw || '{}'));
+      } catch {
+        return send(400, JSON.stringify({ error: 'bad body' }));
+      }
+      if (!digest) return send(400, JSON.stringify({ error: 'digest required' }));
+
+      const orderId = findCreatedOrder(digest);
+      if (!orderId) {
+        return send(200, JSON.stringify({ filled: false, why: 'no order in that transaction' }));
+      }
+
+      const url = `http://${MCP_HOST}:${MCP_PORT}/fill`;
+      try {
+        const r = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ orderId }),
+        });
+        return send(200, JSON.stringify({ orderId, ...(await r.json()) }));
+      } catch (e) {
+        return send(200, JSON.stringify({
+          orderId, filled: false, why: `mcp server unreachable at ${url}: ${e.message}`,
+        }));
       }
     });
     return;
