@@ -46,7 +46,14 @@ export const MARKETPLACE: MarketplaceTalent[] = [
     // The client's half: the agent builds and signs the escrow. The server's half is `fill`,
     // which its manifest declares and which the agent never performs.
     actions: [
-      { id: 'swap', title: 'Swap SUI for USDC, or USDC for SUI, through an escrowed order' },
+      {
+        id: 'swap',
+        // ONE DIRECTION, because that is what the order path can do. The title used to promise
+        // both — the contract has `settle_a2b` and `settle_b2a`, so both look reachable, but the
+        // ORDER only escrows SUI and the filler only settles SUI -> USDC. A user asked for the
+        // other direction and the gate refused, correctly, against a talent that had offered it.
+        title: 'Escrow SUI and receive USDC, filled by whoever takes the order',
+      },
     ],
   },
 ];

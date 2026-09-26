@@ -26,6 +26,18 @@
  * Usage: node src/verify-intent.js
  */
 import { spawnSync } from 'node:child_process';
+// Read the sources the direction check compares, rather than asserting a list.
+import fs from 'node:fs';
+
+/** The same shape the other suites use, for the checks below that are not one of the cases. */
+let sideChecks = 0;
+function check(label, ok, detail) {
+  sideChecks++;
+  if (ok) { console.log(`ok    ${label}`); return; }
+  console.log(`FAIL  ${label}`);
+  if (detail) console.log(`      ${detail}`);
+  failed++;
+}
 import { installTalent, listTalents } from './db.ts';
 import { talentFor } from './talents.ts';
 
@@ -203,5 +215,41 @@ try {
   failed++;
 }
 
-console.log(`\n${CASES.length + 1 - failed}/${CASES.length + 1} passed`);
+// THE GATE'S DIRECTION MUST MATCH WHAT THE ORDER PATH CAN DO.
+//
+// The talent offered "Swap SUI for USDC, or USDC for SUI" and the gate refused the second — both
+// were reading from the same facts and only one of them was right. The contract has `settle_a2b`
+// AND `settle_b2a`, so both directions LOOK reachable; what makes one of them real is whether
+// anything escrows that coin and anything settles that pair.
+//
+// Read from the sources rather than asserted, for the same reason as the other checks: a claim
+// that disagrees with the code is the bug, and a list would be one more thing to keep in step.
+{
+  const orderSrc = fs.readFileSync(new URL('./create-order.ts', import.meta.url), 'utf-8');
+  const fillerSrc = fs.readFileSync(new URL('./mcp-server.ts', import.meta.url), 'utf-8');
+  const gateSrc = fs.readFileSync(new URL('./agent.ts', import.meta.url), 'utf-8');
+
+  const escrowsSui = /type:\s*SUI_TYPE/.test(orderSrc);
+  const settlesB2a = /order::settle_b2a/.test(fillerSrc);
+  const settlesA2b = /order::settle_a2b/.test(fillerSrc);
+  const from = gateSrc.match(/SUPPORTED_FROM = '(\w+)'/)?.[1];
+  const to = gateSrc.match(/SUPPORTED_TO = '(\w+)'/)?.[1];
+
+  check('the gate declares a supported direction', Boolean(from && to), `${from} -> ${to}`);
+  check('the gate matches what the order escrows',
+    (from === 'SUI') === escrowsSui,
+    `gate says ${from}, the order escrows ${escrowsSui ? 'SUI' : 'something else'}`);
+  check('the gate matches what the filler settles',
+    (to === 'USDC') === settlesB2a && (from === 'SUI') === settlesB2a,
+    `gate says ${from} -> ${to}; the filler settles ${settlesB2a ? 'b2a (SUI -> USDC)' : settlesA2b ? 'a2b' : 'nothing'}`);
+
+  // NOT CHECKED: that the reverse direction is unoffered. It cannot be asserted here — the claim
+  // lives in a talent's prose, and a check that greps a sentence is one that breaks when someone
+  // improves the wording. Worth knowing rather than papering over: THE REVERSE DIRECTION IS
+  // UNBUILT, NOT FORBIDDEN. `settle_a2b` exists on chain and nothing calls it, so adding the gate
+  // branch for USDC -> SUI would look like the whole change and would be half of it.
+}
+
+const total = CASES.length + 1 + sideChecks;
+console.log(`\n${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);
