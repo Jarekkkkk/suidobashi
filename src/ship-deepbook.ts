@@ -377,21 +377,32 @@ async function main() {
     }
 
     case 'inspect': {
-      // Recover what a transaction created, from its digest. Exists because the first real run of
-      // this script reported a success with no ids in it, and re-executing to learn them would have
-      // meant paying twice for one answer.
+      // Recover what a transaction DID, from its digest. The include keys are `effects` and
+      // `events` — `objectChanges` is NOT one of them, and an unknown key is ignored without
+      // complaint, which is precisely why every earlier run of this step reported `created: {}`.
+      // Created objects live under `effects.changedObjects` with a kind of `Create`, and their
+      // types under `objectTypes`.
       const digest = flag('--digest');
       if (!digest) fail('--digest is required');
-      // SAFETY: the same call and the same invariant as in `run` — the include keys are honoured
-      // at runtime though untyped, and the response carries the fields `TxResult` names.
       const full = unwrap(((await client.getTransaction({
-        digest, include: { objectChanges: true, events: true },
-      } as never)) as unknown));
+        digest, include: { effects: true, events: true, objectTypes: true },
+      } as never)) as unknown)) as unknown as {
+        effects?: {
+          status?: unknown;
+          changedObjects?: Array<{ idOperation?: string; objectId?: string }>;
+        };
+        events?: Array<{ type?: string; json?: Record<string, unknown> }>;
+        objectTypes?: Record<string, string>;
+      };
       console.log(JSON.stringify({
         mode: 'note', step: 'inspect', digest,
-        created: createdIds(full),
-        order: placedOrderId(full),
-        events: (full.events ?? []).map((e) => e?.type),
+        status: full.effects?.status ?? null,
+        created: (full.effects?.changedObjects ?? []).flatMap((c) =>
+          c.idOperation === 'Create'
+            ? [{ id: c.objectId, type: full.objectTypes?.[String(c.objectId)] }]
+            : [],
+        ),
+        events: (full.events ?? []).map((e) => ({ type: e?.type, json: e?.json })),
       }, null, 2));
       return;
     }
