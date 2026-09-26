@@ -149,7 +149,7 @@ export function LeftPane({
   onDisconnect,
 }: LeftPaneProps) {
   // Chats first: it is the tab you return to, and the one that says what the app is for.
-  const [tab, setTab] = useState<'chats' | 'talents' | 'guard' | 'strategies' | 'notifications'>('chats');
+  const [tab, setTab] = useState<'chats' | 'talents' | 'notifications'>('chats');
   const [out, setOut] = useState<Outstanding | null>(null);
   const [hires, setHires] = useState<Hire[] | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -308,11 +308,6 @@ export function LeftPane({
       <div className="flex shrink-0 items-center gap-1 border-b border-border px-3 py-2">
         <Tab active={tab === 'chats'} onClick={() => setTab('chats')}>chats</Tab>
         <Tab active={tab === 'talents'} onClick={() => setTab('talents')}>talents</Tab>
-        {/* Strategies sit beside talents because they are the same kind of thing to a maker: a
-            capability on offer, which they decide whether to hand anything. Guard is the live one —
-            the account those offers are pointed at. */}
-        <Tab active={tab === 'guard'} onClick={() => setTab('guard')}>guard</Tab>
-        <Tab active={tab === 'strategies'} onClick={() => setTab('strategies')}>strategies</Tab>
         <Tab active={tab === 'notifications'} onClick={() => setTab('notifications')}>
           outstanding
           {outstanding.length > 0 && (
@@ -345,22 +340,12 @@ export function LeftPane({
           <div className="flex h-full flex-col">
             {/* What the model can DO. */}
             <TalentsPane />
-          </div>
-        )}
-
-        {tab === 'strategies' && <StrategiesPane />}
-
-        {tab === 'guard' && (
-          <div className="flex h-full flex-col">
-            {/* The account, its limits, and one button that runs a pass against it. */}
-            <GuardPane />
-          </div>
-        )}
-
-        {tab === 'strategies' && (
-          <div className="flex h-full flex-col">
-            {/* Who could do it, once a guard exists to point at them. */}
+            {/* These were tabs of their own until they were recognised for what they are: one
+                capability each, not a place in the app. A talent is a thing the model calls and a
+                person watches, and these two are exactly that — so they belong in the pane that
+                lists capabilities rather than beside it in the strip. */}
             <StrategiesPane />
+            <GuardPane />
           </div>
         )}
 
