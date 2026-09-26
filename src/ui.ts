@@ -369,8 +369,13 @@ type ActionBody = {
   fixAmountUsdc?: string;
   supplySui?: string;
   boundBps?: string;
-  suspended?: boolean;
-  allow?: boolean;
+  /**
+   * A form sends strings and JSON can carry anything, so the flags accept both rather than
+   * claiming a type the request never guaranteed. `suspend` compares against 'true' for exactly
+   * this reason — testing truthiness made "false" mean yes.
+   */
+  suspended?: boolean | string;
+  allow?: boolean | string;
   tickLower?: number;
   tickUpper?: number;
 };
@@ -452,7 +457,14 @@ function actionFor(kind: string, body: ActionBody): {
     if (!body.hire || !(body.hire in HIRES)) return { error: 'unknown hire' };
     return {
       script: 'src/set-suspended.ts',
-      env: { HIRE: body.hire, SUSPEND: body.suspended ? 'true' : 'false' },
+      // COMPARED, NOT TESTED FOR TRUTHINESS. `body.suspended ? …` looked harmless and was
+      // not: a form sends strings, so "false" is truthy and the hire would be suspended by
+      // a request to resume it. A checkbox is the only caller that could ever have been
+      // right, and nothing was checking that it was one.
+      env: {
+        HIRE: body.hire,
+        SUSPEND: (body.suspended === true || body.suspended === 'true') ? 'true' : 'false',
+      },
       proposal: { action: body.suspended ? 'suspend' : 'resume', hire: body.hire },
     };
   }
@@ -484,7 +496,10 @@ function actionFor(kind: string, body: ActionBody): {
   if (kind === 'venue') {
     if (!body.hire || !(body.hire in HIRES)) return { error: 'unknown hire' };
     const venue = body.venue || HIRES[body.hire as keyof typeof HIRES].venue.id;
-    const allow = body.allow !== false;
+    // THE SAME BUG AS `suspend`, found by fixing that one. `body.allow !== false` reads as a
+    // sensible default and means a form's "false" — which is not the boolean false — allows the
+    // pool. Compared explicitly, so the only things that block are the things meant to.
+    const allow = !(body.allow === false || body.allow === 'false');
     return {
       script: 'src/hire-agent.ts --allowlist',
       env: { HIRE: body.hire, VENUE: venue, ALLOW: allow ? 'true' : 'false' },

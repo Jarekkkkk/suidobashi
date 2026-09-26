@@ -4,6 +4,7 @@ import { signAndSubmit, type Say, type OnTerms } from '@/lib/flow';
 import type { Event } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
+import { ActionForm } from '@/components/ActionForm';
 
 /*
  * The left pane: what is installed, and what is left over.
@@ -83,7 +84,7 @@ function Pill({ tone, children }: { tone: 'muted' | 'chain' | 'advisory'; childr
 }
 
 export function LeftPane({ events, say, onTerms }: { events: Event[]; say: Say; onTerms: OnTerms }) {
-  const [tab, setTab] = useState<'agents' | 'outstanding'>('agents');
+  const [tab, setTab] = useState<'agents' | 'outstanding' | 'vault'>('agents');
   const [out, setOut] = useState<Outstanding | null>(null);
   const [hires, setHires] = useState<Hire[] | null>(null);
   const [busy, setBusy] = useState(false);
@@ -168,6 +169,45 @@ export function LeftPane({ events, say, onTerms }: { events: Event[]; say: Say; 
     }
   }
 
+  /**
+   * Run any of the owner actions.
+   *
+   * ONE RUNNER FOR ALL OF THEM. They differ in their parameters, not in their shape: the server
+   * builds the bytes, the wallet signs them, the server submits. Ten separate handlers would be
+   * ten places to get the busy state and the wording wrong.
+   *
+   * The values arrive as the user typed them — "0.5", not 500000000 — because the server's
+   * `toMist` parses a decimal string and is the one place that knows how. Converting here would
+   * be a second implementation of the same rule.
+   */
+  async function run(kind: string, body: Record<string, string>) {
+    if (busy) return;
+    setBusy(true);
+    say({ kind: 'building', source: 'pipeline', text: `${kind}…`, terminal: false });
+    try {
+      const digest = await signAndSubmit(kind, body, say, onTerms);
+      if (digest) {
+        say({
+          kind: 'done',
+          source: 'chain',
+          text: `${kind} — ${digest}`,
+          terminal: true,
+          data: { digest },
+        });
+        await load();
+      }
+    } catch (e) {
+      say({
+        kind: 'ended',
+        source: 'pipeline',
+        text: `ended: ${e instanceof Error ? e.message : String(e)}`,
+        terminal: true,
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const outstanding = out?.orders ?? [];
 
   return (
@@ -176,6 +216,7 @@ export function LeftPane({ events, say, onTerms }: { events: Event[]; say: Say; 
           roving, and vendoring Radix for this would be more code than it replaces. */}
       <div className="flex shrink-0 items-center gap-1 border-b border-border px-3 py-2">
         <Tab active={tab === 'agents'} onClick={() => setTab('agents')}>agents</Tab>
+        <Tab active={tab === 'vault'} onClick={() => setTab('vault')}>vault</Tab>
         <Tab active={tab === 'outstanding'} onClick={() => setTab('outstanding')}>
           outstanding
           {outstanding.length > 0 && (
@@ -212,6 +253,37 @@ export function LeftPane({ events, say, onTerms }: { events: Event[]; say: Say; 
                   <span className="h-1 w-1 rounded-full bg-border" />
                   <span>{h.venues ?? 0} venue{h.venues === 1 ? '' : 's'}</span>
                 </div>
+
+                {/* The actions this hire takes. Inside its card, because they act on IT — the
+                    alternative is a form somewhere else that needs the hire named in a field. */}
+                <div className="mt-2 flex flex-col gap-1.5 border-t border-border pt-2">
+                  <ActionForm
+                    label="set budget" busy={busy} runLabel="sign"
+                    fields={[{ key: 'amountMist', label: 'SUI', placeholder: '0.05', width: 'sm' }]}
+                    onRun={(v) => run('budget', { hire: h.name, ...v })}
+                  />
+                  <ActionForm
+                    label="swap pool" busy={busy} runLabel="allow"
+                    fields={[{ key: 'venue', label: 'pool', placeholder: '0x…', width: 'lg' }]}
+                    onRun={(v) => run('venue', { hire: h.name, ...v, allow: 'true' })}
+                  />
+                  <ActionForm
+                    label="hand the grant on" busy={busy} runLabel="repoint"
+                    fields={[
+                      { key: 'agent', label: 'to', placeholder: '0x…', width: 'lg' },
+                      { key: 'boundBps', label: 'bound bps', placeholder: '100', width: 'xs' },
+                    ]}
+                    onRun={(v) => run('repoint', { hire: h.name, ...v })}
+                  />
+                  <ActionForm
+                    label="suspend or resume" busy={busy} runLabel="toggle"
+                    fields={[{ key: 'suspended', label: 'true/false', placeholder: 'true', width: 'xs' }]}
+                    // A BOOLEAN, not the typed string. The server tests `body.suspended` for
+                    // truthiness, so "false" would have been truthy and suspended the hire
+                    // instead of resuming it — a text field whose every value means yes.
+                    onRun={(v) => run('suspend', { hire: h.name, suspended: v.suspended === 'true' ? 'true' : 'false' })}
+                  />
+                </div>
               </li>
             ))}
             {hires !== null && hires.length === 0 && (
@@ -221,6 +293,64 @@ export function LeftPane({ events, say, onTerms }: { events: Event[]; say: Say; 
               <li className="px-1 text-[12px] text-muted-foreground">reading…</li>
             )}
           </ul>
+        )}
+
+        {tab === 'vault' && (
+          <div className="flex flex-col gap-4">
+            {/* The vault is where a swap USED to draw from. The escrow path replaced it, so it
+                is empty and stays empty — but withdraw is the route back to custody and the
+                step that must happen before a package upgrade, so it belongs on screen. */}
+            <section className="flex flex-col gap-1.5">
+              <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                vault
+              </div>
+              <ActionForm
+                label="fund it" busy={busy} runLabel="sign"
+                fields={[{ key: 'amountMist', label: 'SUI', placeholder: '0.5', width: 'sm' }]}
+                onRun={(v) => run('topup', v)}
+              />
+              <ActionForm
+                label="withdraw everything" busy={busy} runLabel="sign" danger
+                fields={[]}
+                onRun={() => run('withdraw', {})}
+              />
+            </section>
+
+            {/* The position cycle. ORDER MATTERS and it is open, fund, rebalance, exit — a
+                rebalance refuses an empty position with ENoLiquidity, and an exit is terminal
+                for that guard, so anything after it needs a fresh open. */}
+            <section className="flex flex-col gap-1.5">
+              <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                position
+              </div>
+              <ActionForm
+                label="open a guarded position" busy={busy} runLabel="sign"
+                fields={[]}
+                onRun={() => run('position', {})}
+              />
+              <ActionForm
+                label="fund it" busy={busy} runLabel="sign"
+                fields={[
+                  { key: 'fixAmountUsdc', label: 'USDC', placeholder: '0.5', width: 'sm' },
+                  { key: 'supplySui', label: 'SUI headroom', placeholder: '0.6', width: 'sm' },
+                ]}
+                onRun={(v) => run('deposit', v)}
+              />
+              <ActionForm
+                label="rebalance into a range" busy={busy} runLabel="sign"
+                fields={[
+                  { key: 'tickLower', label: 'lower', placeholder: '68800', width: 'sm' },
+                  { key: 'tickUpper', label: 'upper', placeholder: '69200', width: 'sm' },
+                ]}
+                onRun={(v) => run('rebalance', v)}
+              />
+              <ActionForm
+                label="exit the position" busy={busy} runLabel="sign" danger
+                fields={[]}
+                onRun={() => run('redeem', {})}
+              />
+            </section>
+          </div>
         )}
 
         {tab === 'outstanding' && (
