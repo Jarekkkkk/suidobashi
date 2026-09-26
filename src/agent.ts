@@ -258,7 +258,15 @@ actions: string[];
       return { ok: false, reason: `"${intent.action}" needs a talent that is not installed` };
     }
   if (intent.action === 'unknown') {
-    return { ok: false, reason: 'request is not one of the supported actions' };
+    // NAMES WHAT IS AVAILABLE. "not one of the supported actions" is true and useless — the user
+    // cannot tell something impossible from something not installed, and a talent named after a
+    // verb it does not provide makes that worse.
+    return {
+      ok: false,
+      reason: actions.length
+        ? `request is not one of the supported actions — installed talents provide: ${actions.join(', ')}`
+        : 'request is not one of the supported actions, and no talent is installed yet',
+    };
   }
 
   // A hire must exist before anything else is judged. The code below read `hire.name` on the

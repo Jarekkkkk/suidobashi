@@ -26,11 +26,23 @@ export type TalentAction = {
   title: string;
 };
 
+export type TalentSide = 'maker' | 'filler';
+
 export type MarketplaceTalent = {
   /** `built-in:<name>` for one the app performs, or the URL for one served over MCP. */
   id: string;
   name: string;
   kind: 'built-in' | 'mcp';
+  /**
+   * WHICH SIDE OF A TRADE THIS SERVES, and it is a field rather than a sentence because it was
+   * the thing that confused a real user: a talent called `sui-tokyo-swap` provides `fill`, which
+   * takes someone ELSE's order. Installing it and then asking to swap is a reasonable mistake to
+   * make, and a description buried under the name is not enough to prevent it.
+   *
+   *   maker    you create the intent; something else fills it
+   *   filler   you take intents someone else created
+   */
+  side: TalentSide;
   description: string;
   actions: TalentAction[];
   /** Only for MCP talents: where its manifest lives. */
@@ -42,6 +54,7 @@ export const MARKETPLACE: MarketplaceTalent[] = [
     id: 'built-in:query',
     name: 'query',
     kind: 'built-in',
+    side: 'maker',
     description: 'Read the chain. No permission needed, because nothing is spent.',
     actions: [
       { id: 'status', title: 'Report what the wallet and the guarded position hold' },
@@ -51,6 +64,7 @@ export const MARKETPLACE: MarketplaceTalent[] = [
     id: 'built-in:swap',
     name: 'swap',
     kind: 'built-in',
+    side: 'maker',
     description: 'Escrow SUI or USDC and let someone fill it. Needs an on-chain grant.',
     actions: [
       { id: 'swap', title: 'Swap SUI for USDC, or USDC for SUI, through an escrowed order' },
@@ -60,6 +74,7 @@ export const MARKETPLACE: MarketplaceTalent[] = [
     id: 'built-in:position',
     name: 'position',
     kind: 'built-in',
+    side: 'maker',
     description: 'Open and manage a guarded liquidity position. Needs a grant and a guard.',
     actions: [
       { id: 'deposit_liquidity', title: 'Add liquidity to the guarded position' },
@@ -72,10 +87,13 @@ export const MARKETPLACE: MarketplaceTalent[] = [
     // than something a user has to work out from a manifest. Its action takes someone ELSE's
     // order, which is why installing it gives the agent nothing to do.
     id: 'http://127.0.0.1:8790',
-    name: 'sui-tokyo-swap',
+    // Named for what it DOES. It was `sui-tokyo-swap`, which promised a verb it does not
+    // provide — the manifest's action is `fill`, the other side of the trade.
+    name: 'sui-tokyo-filler',
     kind: 'mcp',
+    side: 'filler',
     url: 'http://127.0.0.1:8790',
-    description: 'The reference filler: takes escrowed orders that others create.',
+    description: 'Takes escrowed orders that OTHERS create. You do not need this to swap.',
     actions: [
       { id: 'fill', title: 'Fill an escrowed swap order created by someone else' },
     ],
