@@ -1,0 +1,40 @@
+/* Tailwind, CSS-first. v4 needs no config file — the theme lives here. */
+
+@import "tailwindcss";
+
+/*
+ * Where the classes come from, stated rather than left to auto-detection. Auto-detection
+ * found the TSX fine; being explicit means adding a component directory later is a
+ * deliberate edit rather than something that silently works or does not.
+ *
+ * Note that the @theme colours below do not appear in the output until something uses
+ * them — Tailwind tree-shakes unused theme variables. Their absence is not a build
+ * failure, and that is worth knowing before concluding the CSS is broken.
+ */
+@source ".";
+
+/*
+ * The palette is dark-first because the app is a trading surface: it sits open for long
+ * stretches and a bright background next to a wallet popup is unpleasant.
+ *
+ * The three event sources are colour-coded deliberately rather than decoratively. A
+ * model's words are ADVISORY, our own progress is unconfirmed, and a chain-read fact is
+ * authoritative — if they render alike, the interface is telling the user that a guess
+ * and a settled transaction are the same kind of thing.
+ */
+@theme {
+  --color-advisory: oklch(0.78 0.11 85);   /* model — warm, a suggestion */
+  --color-pipeline: oklch(0.72 0.07 250);  /* ours — neutral, unconfirmed */
+  --color-chain:    oklch(0.78 0.13 150);  /* chain — green, settled */
+}
+
+html, body, #app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: oklch(0.16 0.01 260);
+  color: oklch(0.92 0.01 260);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}

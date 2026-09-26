@@ -59,6 +59,49 @@ if (!LOOPBACK.test(HOST) && process.env.UI_ALLOW_NON_LOOPBACK !== '1') {
 const TOKEN = crypto.randomBytes(24).toString('hex');
 
 /**
+ * Build the React app and its CSS at startup, the same way the wallet bundle is.
+ *
+ * TWO build steps, because they are genuinely two tools: bun bundles the TSX, and
+ * Tailwind's CLI turns the CSS-first config into the classes actually used. Both write
+ * to a temp path outside the project and are removed, so nothing generated is ever
+ * mistaken for source — and neither can be stale relative to src/web/app/.
+ */
+function buildAppBundle() {
+  const jsPath = path.join(os.tmpdir(), `sui-tokyo-app-${process.pid}.js`);
+  const cssPath = path.join(os.tmpdir(), `sui-tokyo-app-${process.pid}.css`);
+
+  const b = spawnSync(
+    'bun',
+    ['build', 'src/web/app/main.tsx', '--outfile', jsPath, '--format=esm', '--target=browser'],
+    { encoding: 'utf-8', timeout: 120_000 },
+  );
+  if (b.status !== 0) {
+    console.error('app bundle build failed:', ((b.stderr || b.stdout) || 'no output').slice(-400));
+    return null;
+  }
+
+  const c = spawnSync(
+    'bunx',
+    ['@tailwindcss/cli', '-i', 'src/web/app/app.css', '-o', cssPath],
+    { encoding: 'utf-8', timeout: 120_000 },
+  );
+  if (c.status !== 0) {
+    console.error('app css build failed:', ((c.stderr || c.stdout) || 'no output').slice(-400));
+    return null;
+  }
+
+  try {
+    const built = { js: fs.readFileSync(jsPath, 'utf-8'), css: fs.readFileSync(cssPath, 'utf-8') };
+    fs.unlinkSync(jsPath);
+    fs.unlinkSync(cssPath);
+    return built;
+  } catch (e) {
+    console.error('app output unreadable:', e.message);
+    return null;
+  }
+}
+
+/**
  * Build the wallet bundle at startup and hold it in memory.
  *
  * Generated rather than committed: 850 KB of transpiled libraries does not belong
@@ -787,6 +830,18 @@ const server = http.createServer((req, res) => {
     }
   }
 
+  if (req.method === 'GET' && (req.url === '/app.js' || req.url === '/app.css')) {
+    // Not token-gated, for the same reason wallet.js is not: these contain no secrets,
+    // and a page that cannot load its own script cannot ask for a token anyway.
+    if (!appBundle) {
+      return send(503, 'app bundle unavailable — server log has the build error',
+        'text/plain; charset=utf-8');
+    }
+    return req.url === '/app.js'
+      ? send(200, appBundle.js, 'text/javascript; charset=utf-8')
+      : send(200, appBundle.css, 'text/css; charset=utf-8');
+  }
+
   if (req.method === 'GET' && req.url === '/') {
     // Token injected here rather than fetched, so the page itself never has to ask
     // for it. A cross-origin caller can reach the port but cannot read this.
@@ -949,6 +1004,7 @@ server.listen(PORT, HOST, () => {
 
 // Build once at start so /wallet.js can never be stale.
 const walletBundleJs = buildWalletBundle();
+const appBundle = buildAppBundle();
 console.error(walletBundleJs
   ? `wallet bundle ready (${(walletBundleJs.length / 1024).toFixed(0)} KB, served from memory)`
   : 'wallet bundle FAILED — the page will show a connect error');
