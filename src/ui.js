@@ -97,7 +97,7 @@ function buildAppBundle() {
     fs.unlinkSync(cssPath);
     return built;
   } catch (e) {
-    console.error('app output unreadable:', e.message);
+    console.error('app output unreadable:', errText(e));
     return null;
   }
 }
@@ -152,7 +152,7 @@ function buildWalletBundle() {
     fs.unlinkSync(out);
     return js;
   } catch (e) {
-    console.error('wallet bundle unreadable:', e.message);
+    console.error('wallet bundle unreadable:', errText(e));
     return null;
   }
 }
@@ -209,7 +209,7 @@ async function hires() {
       row.ownVenueOpen = list.includes(String(h.venue.id).toLowerCase());
       row.destination = j.destination;
     } catch (e) {
-      row.error = String(e?.message || e).slice(0, 120);
+      row.error = String(errText(e)).slice(0, 120);
     }
     out.push(row);
   }
@@ -702,7 +702,7 @@ function adoptGuardFrom(digest) {
   try {
     before = fs.readFileSync(file, 'utf8');
   } catch (e) {
-    return { id, version, persisted: false, note: `adopted in memory; could not read ${file}: ${e.message}` };
+    return { id, version, persisted: false, note: `adopted in memory; could not read ${file}: ${errText(e)}` };
   }
 
   // null means the file did not match, and nothing should be written. See
@@ -720,7 +720,7 @@ function adoptGuardFrom(digest) {
     // Swallowed on purpose. The transaction succeeded and the guard is adopted in
     // memory, so the caller still needs an answer about it; letting this throw would
     // escape submit() into the request handler and return nothing at all.
-    return { id, version, persisted: false, note: `adopted in memory; could not write ${file}: ${e.message}` };
+    return { id, version, persisted: false, note: `adopted in memory; could not write ${file}: ${errText(e)}` };
   }
 }
 
@@ -887,6 +887,24 @@ function findCreatedOrder(digest) {
   const created = (doc.objectChanges || []).find((/** @type {any} */ c) => c.type === 'created'
     && String(c.objectType || '').includes('::order::Order<'));
   return created?.objectId ?? null;
+}
+
+/**
+ * The message from a caught value.
+ *
+ * `catch` binds `unknown`, because anything can be thrown — an Error, a string, a rejected
+ * promise's reason. Reading `.message` off it is the mistake TypeScript is right to flag: an
+ * Error has one and a thrown string does not, where the string IS the message.
+ *
+ * The previous code read `e.message` directly, which works for everything this project throws
+ * and would print `undefined` for the one thing it does not.
+ *
+ * @param {unknown} e
+ * @returns {string}
+ */
+function errText(e) {
+  if (e instanceof Error) return e.message;
+  return typeof e === 'string' ? e : (JSON.stringify(e) ?? String(e));
 }
 
 /**
@@ -1195,7 +1213,7 @@ const PAGE = `<!doctype html>
 /** @param {string} label @param {unknown} err */
 const complain = (label, err) => {
   const e = err instanceof Error ? err : new Error(String(err));
-  console.error(`\n!! ${label}: ${e.message}`);
+  console.error(`\n!! ${label}: ${errText(e)}`);
   console.error((e.stack ?? '').split('\n').slice(1, 4).join('\n'));
   console.error('!! the server is still running; the request that caused this was not answered\n');
 };
@@ -1233,7 +1251,7 @@ const server = http.createServer((req, res) => {
       return send(200, fs.readFileSync(`src/web/${name}`, 'utf8'),
         'text/javascript; charset=utf-8');
     } catch (e) {
-      return send(500, `src/web/${name} unreadable: ${e.message}`, 'text/plain; charset=utf-8');
+      return send(500, `src/web/${name} unreadable: ${errText(e)}`, 'text/plain; charset=utf-8');
     }
   }
 
@@ -1270,17 +1288,17 @@ const server = http.createServer((req, res) => {
   }
 
   if (req.method === 'GET' && req.url === '/api/state') {
-    return state().then((s) => send(200, JSON.stringify(s))).catch((e) => send(500, JSON.stringify({ error: e.message })));
+    return state().then((s) => send(200, JSON.stringify(s))).catch((e) => send(500, JSON.stringify({ error: errText(e) })));
   }
 
   if (req.method === 'GET' && req.url === '/api/outstanding') {
     return outstandingOrders()
       .then((o) => send(200, JSON.stringify(o)))
-      .catch((e) => send(500, JSON.stringify({ error: e.message })));
+      .catch((e) => send(500, JSON.stringify({ error: errText(e) })));
   }
 
   if (req.method === 'GET' && req.url === '/api/hires') {
-    return hires().then((h) => send(200, JSON.stringify(h))).catch((e) => send(500, JSON.stringify({ error: e.message })));
+    return hires().then((h) => send(200, JSON.stringify(h))).catch((e) => send(500, JSON.stringify({ error: errText(e) })));
   }
 
   if (req.method === 'POST' && (req.url === '/api/propose' || req.url === '/api/build')) {
@@ -1329,7 +1347,7 @@ const server = http.createServer((req, res) => {
           : [event('building', 'pipeline', 'the transaction is built and simulated')];
         return send(out.error ? 400 : 200, JSON.stringify({ ...out, events }));
       } catch (e) {
-        return send(500, JSON.stringify({ error: String(e?.message || e) }));
+        return send(500, JSON.stringify({ error: String(errText(e)) }));
       }
     });
     return;
@@ -1384,7 +1402,7 @@ const server = http.createServer((req, res) => {
         return send(200, JSON.stringify({
           orderId,
           filled: false,
-          why: `mcp server unreachable at ${url}: ${e.message}`,
+          why: `mcp server unreachable at ${url}: ${errText(e)}`,
           events: [event('notified', 'pipeline', 'the filler could not be reached')],
         }));
       }
