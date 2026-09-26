@@ -31,6 +31,16 @@ const AMOUNT_MIST = BigInt(process.env.ORDER_AMOUNT_MIST ?? '10000000');   // 0.
  */
 const MIN_OUT = BigInt(process.env.ORDER_MIN_OUT ?? '5000');               // 0.005 USDC
 /**
+ * What you will pay whoever fills this, in USDC — the OUTPUT coin, so it comes out of
+ * the proceeds rather than needing a second balance. Zero means no fee, and is stored
+ * as absence.
+ *
+ * `min_out` is what you RECEIVE, so the fee is on top of it rather than inside it: a
+ * floor of 5 USDC means 5 USDC lands in your wallet and the fee is paid from above
+ * that. Whoever fills the order collects, so no recipient is named.
+ */
+const FEE_OUT = BigInt(process.env.ORDER_FEE_OUT ?? '0');
+/**
  * How long the order stays open, in milliseconds. After this, ANYONE may refund it —
  * and the funds always go to the maker.
  *
@@ -76,13 +86,16 @@ async function main() {
   const nowMs = BigInt(Date.now());
   const expiresAtMs = nowMs + TTL_MS;
 
+  // `create_with_fee` rather than `create` unconditionally: a zero fee is stored as
+  // absent, so it behaves identically to `create` and there is one path to maintain.
   tx.moveCall({
-    target: `${PACKAGE_LATEST_ID}::order::create`,
+    target: `${PACKAGE_LATEST_ID}::order::create_with_fee`,
     typeArguments: [SUI_TYPE],
     arguments: [
       escrow,
       tx.pure.id(POOL),
       tx.pure.u64(MIN_OUT),
+      tx.pure.u64(FEE_OUT),
       tx.pure.u64(expiresAtMs),
       tx.pure.address(DESTINATION),
       clock,
@@ -105,6 +118,8 @@ async function main() {
     sender,
     escrowSui: (Number(AMOUNT_MIST) / 1e9).toString(),
     minOutUsdc: (Number(MIN_OUT) / 1e6).toString(),
+    feeOutUsdc: (Number(FEE_OUT) / 1e6).toString(),
+    ttlSeconds: Number(TTL_MS / 1000n),
     pool: POOL,
     destination: DESTINATION,
     expiresAtMs: expiresAtMs.toString(),

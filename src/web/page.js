@@ -295,7 +295,10 @@ $('ordMake').onclick = () => {
   if (!amountMist) return say('enter SUI as a plain decimal, e.g. 0.01', 'bad');
   const minOutUsdc = usdcToUnits($('ordMin').value);
   if (!minOutUsdc) return say('enter USDC as a plain decimal, e.g. 0.005', 'bad');
-  return ownerAction('order', { amountMist, minOutUsdc });
+  // The fee is what the filler collects, and the floor is what YOU receive — so the
+  // fee sits on top of the floor rather than coming out of it.
+  const feeOutUsdc = usdcToUnits($('ordFee').value) ?? '0';
+  return ownerAction('order', { amountMist, minOutUsdc, feeOutUsdc });
 };
 
 // Step 3: reclaim a settled order's storage. The rebate goes to whoever signs, which
