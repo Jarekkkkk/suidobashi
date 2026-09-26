@@ -4,7 +4,7 @@ import { signAndSubmit, type Say, type OnTerms } from '@/lib/flow';
 import type { Event } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
-import { ActionForm } from '@/components/ActionForm';
+import { PolicySheet } from '@/components/PolicySheet';
 import { ChatsPane } from '@/components/ChatsPane';
 import { TalentsPane } from '@/components/TalentsPane';
 
@@ -39,10 +39,15 @@ type Outstanding = {
 
 type Hire = {
   name: string;
+  policyId: string;
   agent?: string;
   budgetSui?: string;
   suspended?: boolean;
   venues?: number;
+  /** The allowed pools themselves, for the settings sheet. A count cannot tell one venue from
+   *  another, and the sheet has to show what a save would change. */
+  venueIds?: string[];
+  destination?: string;
 };
 
 /** Seconds until an order expires, or null once it has. */
@@ -117,6 +122,7 @@ export function LeftPane({
   const [tab, setTab] = useState<'chats' | 'talents' | 'notifications'>('chats');
   const [out, setOut] = useState<Outstanding | null>(null);
   const [hires, setHires] = useState<Hire[] | null>(null);
+  const [sheetOpen, setSheetOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 
@@ -210,7 +216,7 @@ export function LeftPane({
    * `toMist` parses a decimal string and is the one place that knows how. Converting here would
    * be a second implementation of the same rule.
    */
-  async function run(kind: string, body: Record<string, string>) {
+  async function run(kind: string, body: Record<string, unknown>) {
     if (busy) return;
     setBusy(true);
     say({ kind: 'building', source: 'pipeline', text: `${kind}…`, terminal: false });
@@ -295,7 +301,11 @@ export function LeftPane({
               </div>
 
             <ul className="flex flex-col gap-2">
-            {(hires ?? []).map((h) => (
+            {/* ONE grant. The registry keeps both — the checks exercise the second, and the
+                ambiguous-request path needs two names to exist — but a pane is a thing you
+                MANAGE, and there is one thing to manage here. The second policy is still on
+                chain and still callable; it is simply not a choice the UI offers. */}
+            {(hires ?? []).filter((h) => h.name === 'standard').map((h) => (
               <li
                 key={h.name}
                 className="rounded-lg border border-border bg-card p-2.5 transition-colors hover:border-border/80"
@@ -303,6 +313,20 @@ export function LeftPane({
                 <div className="flex items-center gap-2">
                   <span className="text-[13px] font-medium">{h.name}</span>
                   {h.suspended && <Pill tone="advisory">suspended</Pill>}
+                  {/* The gear. Every boundary lives behind it, saved in ONE transaction —
+                      where before each had its own form, its own button and its own
+                      signature, which is four chances to end up in a state nobody chose. */}
+                  <button
+                    className="ml-auto rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                    onClick={() => setSheetOpen(true)}
+                    title="policy settings"
+                    aria-label="policy settings"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="3" />
+                      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                    </svg>
+                  </button>
                 </div>
                 <div className="mt-1.5 font-mono text-[10px] text-muted-foreground">
                   {h.agent ? `${h.agent.slice(0, 10)}…${h.agent.slice(-4)}` : 'no agent'}
@@ -312,46 +336,24 @@ export function LeftPane({
                   <span className="h-1 w-1 rounded-full bg-border" />
                   <span>{h.venues ?? 0} venue{h.venues === 1 ? '' : 's'}</span>
                 </div>
-
-                {/* The actions this hire takes. Inside its card, because they act on IT — the
-                    alternative is a form somewhere else that needs the hire named in a field. */}
-                <div className="mt-2 flex flex-col gap-1.5 border-t border-border pt-2">
-                  <ActionForm
-                    label="set budget" busy={busy} runLabel="sign"
-                    fields={[{ key: 'amountMist', label: 'SUI', placeholder: '0.05', width: 'sm' }]}
-                    onRun={(v) => run('budget', { hire: h.name, ...v })}
-                  />
-                  <ActionForm
-                    label="swap pool" busy={busy} runLabel="allow"
-                    fields={[{ key: 'venue', label: 'pool id', placeholder: '0x…', width: 'lg' }]}
-                    onRun={(v) => run('venue', { hire: h.name, ...v, allow: 'true' })}
-                  />
-                  <ActionForm
-                    label="hand the grant on" busy={busy} runLabel="repoint"
-                    fields={[
-                      { key: 'agent', label: 'to', placeholder: '0x…', width: 'lg' },
-                      { key: 'boundBps', label: 'bound bps', placeholder: '100', width: 'xs' },
-                    ]}
-                    onRun={(v) => run('repoint', { hire: h.name, ...v })}
-                  />
-                  <ActionForm
-                    label="suspend or resume" busy={busy} runLabel="toggle"
-                    fields={[{ key: 'suspended', label: 'true/false', placeholder: 'true', width: 'xs' }]}
-                    // A BOOLEAN, not the typed string. The server tests `body.suspended` for
-                    // truthiness, so "false" would have been truthy and suspended the hire
-                    // instead of resuming it — a text field whose every value means yes.
-                    onRun={(v) => run('suspend', { hire: h.name, suspended: v.suspended === 'true' ? 'true' : 'false' })}
-                  />
-                </div>
               </li>
             ))}
             {hires !== null && hires.length === 0 && (
-              <li className="px-1 text-[12px] text-muted-foreground">No hires configured.</li>
+              <li className="px-1 text-[12px] text-muted-foreground">No grants configured.</li>
             )}
             {hires === null && !note && (
               <li className="px-1 text-[12px] text-muted-foreground">reading…</li>
             )}
             </ul>
+
+            {/* The sheet reads its baseline from the chain row, so it can show what a save
+                would change rather than only what the fields contain. */}
+            {sheetOpen && (() => {
+              const h = (hires ?? []).find((x) => x.name === 'standard');
+              return h ? (
+                <PolicySheet hire={h} busy={busy} onClose={() => setSheetOpen(false)} run={run} />
+              ) : null;
+            })()}
             </div>
           </div>
         )}

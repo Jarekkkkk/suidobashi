@@ -283,6 +283,61 @@ for (const token of ['--background', '--foreground', '--sidebar', '--card', '--b
   }
 }
 
+/*
+ * The policy panel: one grant SHOWN, both KEPT in the registry.
+ *
+ * Hiding a hire from the pane and removing it from `hires.ts` are different acts, and the
+ * difference is invisible until something breaks. The pane is a thing you manage, so it shows
+ * one. The registry is what the model extracts names from and what the ambiguous-request case
+ * counts, so it keeps both — and deleting `cautious` as "unused" would look like tidying.
+ */
+{
+  const left = fs.readFileSync('src/web/app/components/LeftPane.tsx', 'utf8');
+  const registry = fs.readFileSync('src/hires.ts', 'utf8');
+  const intent = fs.readFileSync('src/verify-intent.js', 'utf8');
+
+  const filters = [...left.matchAll(/\.filter\(\s*\(?h\)?\s*=>\s*h\.name === '([a-z]+)'/g)].map((m) => m[1]);
+  check('the grants pane filters to exactly one hire', filters.length === 1,
+    `found ${filters.length} — the pane would show ${filters.length} grants`);
+  check('the pane shows the default hire', filters[0] === 'standard',
+    `filters to "${filters[0]}"`);
+
+  for (const name of ['standard', 'cautious']) {
+    check(`the registry still holds "${name}"`, new RegExp(`^\\s+${name}: \\{`, 'm').test(registry),
+      'removed from hires.ts — the ambiguous-request case needs two names to exist');
+  }
+  check('the ambiguous-request case still asks between two', /decision: 'ASKING'/.test(intent),
+    'no ASKING case in verify-intent.js');
+}
+
+/*
+ * The truthiness bug, which both older kinds had and which is why the policy kind compares.
+ *
+ * `body.suspended ? …` and `body.allow !== false` both read as sensible defaults and both meant
+ * that a form's "false" — a non-empty string, therefore truthy — SUSPENDED a hire when the
+ * request was to resume it. Read from the source because that is where the difference lives.
+ */
+{
+  const ui = fs.readFileSync('src/ui.ts', 'utf8');
+  const start = ui.indexOf("kind === 'policy'");
+  const policy = start < 0 ? '' : ui.slice(start, ui.indexOf("kind === 'position'", start));
+
+  check('the policy kind exists in the build route', policy.length > 0,
+    'no kind === \'policy\' branch — the panel has nothing to call');
+  check('the policy kind compares suspended rather than testing truthiness',
+    policy.includes("typeof body.suspended === 'boolean'"),
+    'a string "false" would suspend a hire instead of resuming it');
+  // The ternary that follows is SAFE BECAUSE of the guard, so asserting the guard exists is not
+  // enough — a bare `body.suspended ? …` would satisfy that too. What matters is that the guard
+  // comes first. The first version of this check looked for the substring alone, flagged the
+  // guarded use as the bug it was guarding against, and never passed once.
+  const guardAt = policy.indexOf("typeof body.suspended === 'boolean'");
+  const useAt = policy.indexOf('body.suspended ?');
+  check('the guard precedes any use of the value',
+    guardAt >= 0 && (useAt < 0 || guardAt < useAt),
+    `guard at ${guardAt}, use at ${useAt} — the value is read before it is checked`);
+}
+
 if (failures) {
   console.error(`\n${failures} check(s) failed.`);
   process.exit(1);

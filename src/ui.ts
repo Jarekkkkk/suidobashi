@@ -212,6 +212,12 @@ async function hires() {
     agent?: string;
     suspended?: boolean;
     venues?: number;
+    /**
+     * The allowed pools themselves, not just how many. The settings panel has to show what is
+     * currently open or it cannot show what a save would change — and a count cannot tell one
+     * venue from another, which is the whole content of the field.
+     */
+    venueIds?: string[];
     ownVenueOpen?: boolean;
     destination?: string;
     error?: string;
@@ -230,6 +236,7 @@ async function hires() {
       row.agent = j.agent;
       row.suspended = Boolean(j.suspended);
       const list: string[] = (j.allowed_pools?.contents ?? []).map((x: unknown) => String(x).toLowerCase());
+      row.venueIds = list;
       row.venues = list.length;
       // Whether this hire's OWN venue is open, read from the chain. A count alone
       // hides the difference between two hires on two different pools.
