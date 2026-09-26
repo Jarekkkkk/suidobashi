@@ -14,14 +14,14 @@ were later reversed.
 
 ## 1. Current state
 
-**Package v8 is live on mainnet.** Everything below was read from `src/addresses.ts` and
+**Package v9 is live on mainnet.** Everything below was read from `src/addresses.ts` and
 `move/Published.toml`, not recalled.
 
 ```text
-package v8          0x4529c5490947c2c13997fabe78dfcc38f8645da3582713891eb1620eac4d0632
+package v9          0xe420d1be090d84763b55ee6051cee1c346888d7ec8107af41e9172cc9ef8b864
 original id (v1)    0x2441fb74d7684f43019fdabf27d6de24dc8e42826ddd86ba07bc21aded80c014
 upgrade cap         0x50a57fce03614745395e2a9e1aac204cfd0f7979532106669066283898b97ec9
-modules             order · policy · position_guard · spend_vault
+modules             deepbook_guard · order · policy · position_guard · spend_vault
 CLI                 1.80.0
 
 vault               0x153bb450c5bbb06c4587f95eec2b14f81cd6163792d43b59175a6df6504c2d42  (EMPTY)
@@ -46,13 +46,14 @@ bun src/mcp-server.ts          # the reference filler, 127.0.0.1:8790
 bun src/query-server.ts        # the read-only data server, 127.0.0.1:8791
 ```text
 
-`bun run verify` runs one tsc pass and five check suites — `verify-intent`, `verify-page`,
-`verify-guard`, `verify-order`, `verify-query`. **Run it as its own step** — batching it
-with `git commit` has shipped a red verify twice.
+`bun run verify` runs one tsc pass and seven check suites — `verify-intent`, `verify-page`,
+`verify-guard`, `verify-order`, `verify-query`, `verify-deepbook`, `verify-runner`. **Run it as its
+own step** — batching it with `git commit` has shipped a red verify twice.
 
-Note the shape, because a single "/N passed" is not what this prints: three suites report their own
-totals (21, 9 and 22 as of the query talent) and two report only `all checks passed`. A green run is
-`exit 0` with no `FAIL` line, not one number.
+Note the shape, because a single "/N passed" is not what this prints: four suites report their own
+totals (`verify-order` 9, `verify-query` 22, `verify-deepbook` 21, `verify-runner` 29 as of the
+guard) and others report only `all checks passed`. A green run is `exit 0` with no `FAIL` line,
+not one number.
 
 ---
 
