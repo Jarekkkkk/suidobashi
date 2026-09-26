@@ -38,8 +38,18 @@ const MIN_OUT = BigInt(process.env.ORDER_MIN_OUT ?? '5000');               // 0.
  * `min_out` is what you RECEIVE, so the fee is on top of it rather than inside it: a
  * floor of 5 USDC means 5 USDC lands in your wallet and the fee is paid from above
  * that. Whoever fills the order collects, so no recipient is named.
+ *
+ * 0.005 USDC is a DEFAULT, not a price — the fee is declared per order, so this is
+ * what you offer unless you change it. And it sits at break-even for a filler:
+ *
+ *   a successful fill   gas 0.0043 SUI x ~$1.14 = $0.0049, fee $0.0050
+ *   a race lost late    gas 0.0011 SUI, no fee   = -$0.0013
+ *
+ * So one lost race outweighs several wins. A server that wants a margin sets its own
+ * MINIMUM FEE and declines orders below it — the server's floor is the other half of
+ * this pair, and it belongs there rather than in the maker's default.
  */
-const FEE_OUT = BigInt(process.env.ORDER_FEE_OUT ?? '0');
+const FEE_OUT = BigInt(process.env.ORDER_FEE_OUT ?? '5000');   // 0.005 USDC
 /**
  * How long the order stays open, in milliseconds. After this, ANYONE may refund it —
  * and the funds always go to the maker.
