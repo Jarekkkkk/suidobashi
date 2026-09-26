@@ -1163,55 +1163,6 @@ const server = http.createServer((req, res) => {
     return state().then((s) => send(200, JSON.stringify(s))).catch((e) => send(500, JSON.stringify({ error: e.message })));
   }
 
-  if (req.method === 'POST' && req.url === '/api/revoke') {
-    let raw = '';
-    req.on('data', (c) => { raw += c; if (raw.length > 8192) req.destroy(); });
-    req.on('end', () => {
-      let orderId;
-      try {
-        ({ orderId } = JSON.parse(raw || '{}'));
-      } catch {
-        return send(400, JSON.stringify({ error: 'bad body' }));
-      }
-      if (!/^0x[0-9a-f]{64}$/.test(String(orderId))) {
-        return send(400, JSON.stringify({ error: 'orderId must be a full 0x object id' }));
-      }
-
-      // EXECUTED HERE, not signed in the wallet, and the reason is the escrow's own design:
-      // the destination is FIXED AT CREATE, so a refund cannot send value anywhere except
-      // back to the maker. That is exactly why the operation is permissionless on chain — a
-      // maker who goes quiet can still be paid — and it is why this server gains no power by
-      // running it. It can return escrow to its owner and do nothing else with it.
-      //
-      // The alternative was the wallet, and Slush refuses to prepare this transaction at all
-      // — it fails before showing a modal — while the chain executes the identical bytes
-      // happily. Routing around a wallet bug by removing the wallet is the smaller change
-      // than debugging a minified extension, and it leaves the maker's funds no less safe.
-      const r = spawnSync('node', ['src/refund-order.js', '--execute'], {
-        env: { ...process.env, ORDER_ID: orderId },
-        encoding: 'utf-8',
-        timeout: 300_000,
-      });
-      const doc = firstJson(r.stdout || '');
-      const digest = doc?.digest ?? null;
-      const ok = doc?.status?.success === true;
-
-      const events = ok
-        ? [event('revoking', 'pipeline', 'the server is revoking the expired order'),
-           event('revoked', 'chain', endingFor('revoked', {}))]
-        : [event('refused', 'pipeline', endingFor('refused', {
-          reason: (r.stderr || r.stdout || 'the refund failed').trim().replace(/^fatal:\s*/i, ''),
-        }))];
-
-      return send(ok ? 200 : 409, JSON.stringify({
-        orderId, digest, ok,
-        why: ok ? null : (doc?.error ?? (r.stderr || '').trim().slice(0, 300)),
-        events,
-      }));
-    });
-    return;
-  }
-
   if (req.method === 'GET' && req.url === '/api/outstanding') {
     return outstandingOrders()
       .then((o) => send(200, JSON.stringify(o)))
