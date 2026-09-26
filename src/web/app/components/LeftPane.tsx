@@ -123,10 +123,14 @@ export function LeftPane({
   const [out, setOut] = useState<Outstanding | null>(null);
   const [hires, setHires] = useState<Hire[] | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
+  /** A chain read in flight. Distinct from `busy`, which means a SIGNATURE is pending — the
+   *  two look similar in the UI and are not the same thing to be waiting on. */
+  const [reading, setReading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    setReading(true);
     try {
       const [o, h] = await Promise.all([
         api<Outstanding>('/api/outstanding'),
@@ -136,6 +140,8 @@ export function LeftPane({
       setHires(Array.isArray(h) ? h : (h.hires ?? []));
     } catch (e) {
       setNote(e instanceof Error ? e.message : String(e));
+    } finally {
+      setReading(false);
     }
   }, []);
 
@@ -286,41 +292,48 @@ export function LeftPane({
             {/* What the model can DO. */}
             <TalentsPane />
 
-            {/* What those capabilities are PERMITTED. Two things, in one tab, in this order:
-                a grant without a talent is a permission to do nothing, and the distinction is
-                the reason neither is called "hire" any more. */}
+            {/* THE GRANT IS NOT LISTED. A grant is one thing you have, not a set you choose
+                between, so the pane does not enumerate it — it offers the two things you can
+                DO with it. Everything the card used to show (agent, budget, venue count) is
+                in the sheet, where it is editable rather than merely displayed. */}
             <div className="flex flex-col gap-3 border-t border-border p-3">
-              <div>
-                <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                  grants
+              <div className="flex items-start gap-2">
+                <div className="flex-1">
+                  <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                    grants
+                  </div>
+                  <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground/60">
+                    On-chain permissions. A talent that spends needs one; a talent that only reads
+                    does not.
+                  </p>
                 </div>
-                <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground/60">
-                  On-chain permissions. A talent that spends needs one; a talent that only reads
-                  does not.
-                </p>
-              </div>
 
-            <ul className="flex flex-col gap-2">
-            {/* ONE grant. The registry keeps both — the checks exercise the second, and the
-                ambiguous-request path needs two names to exist — but a pane is a thing you
-                MANAGE, and there is one thing to manage here. The second policy is still on
-                chain and still callable; it is simply not a choice the UI offers. */}
-            {(hires ?? []).filter((h) => h.name === 'standard').map((h) => (
-              <li
-                key={h.name}
-                className="rounded-lg border border-border bg-card p-2.5 transition-colors hover:border-border/80"
-              >
-                <div className="flex items-center gap-2">
-                  <span className="text-[13px] font-medium">{h.name}</span>
-                  {h.suspended && <Pill tone="advisory">suspended</Pill>}
-                  {/* The gear. Every boundary lives behind it, saved in ONE transaction —
-                      where before each had its own form, its own button and its own
-                      signature, which is four chances to end up in a state nobody chose. */}
+                <div className="flex shrink-0 items-center gap-0.5 pt-0.5">
+                  {/* Read again from the chain. The icon spins while the read is in flight,
+                      because a refresh that gives no sign it is working is indistinguishable
+                      from one that did nothing. */}
                   <button
-                    className="ml-auto rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                    className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
+                    onClick={() => void load()}
+                    disabled={reading}
+                    title="refresh"
+                    aria-label="refresh"
+                  >
+                    <svg
+                      className={cn('h-3.5 w-3.5', reading && 'animate-spin')}
+                      viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                    >
+                      <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                      <path d="M21 3v6h-6" />
+                    </svg>
+                  </button>
+
+                  <button
+                    className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                     onClick={() => setSheetOpen(true)}
-                    title="policy settings"
-                    aria-label="policy settings"
+                    title="policy"
+                    aria-label="policy"
                   >
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <circle cx="12" cy="12" r="3" />
@@ -328,23 +341,7 @@ export function LeftPane({
                     </svg>
                   </button>
                 </div>
-                <div className="mt-1.5 font-mono text-[10px] text-muted-foreground">
-                  {h.agent ? `${h.agent.slice(0, 10)}…${h.agent.slice(-4)}` : 'no agent'}
-                </div>
-                <div className="mt-1.5 flex items-center gap-2 text-[11px] text-muted-foreground">
-                  <span>budget {h.budgetSui ?? '—'} SUI</span>
-                  <span className="h-1 w-1 rounded-full bg-border" />
-                  <span>{h.venues ?? 0} venue{h.venues === 1 ? '' : 's'}</span>
-                </div>
-              </li>
-            ))}
-            {hires !== null && hires.length === 0 && (
-              <li className="px-1 text-[12px] text-muted-foreground">No grants configured.</li>
-            )}
-            {hires === null && !note && (
-              <li className="px-1 text-[12px] text-muted-foreground">reading…</li>
-            )}
-            </ul>
+              </div>
 
             {/* The sheet reads its baseline from the chain row, so it can show what a save
                 would change rather than only what the fields contain. */}
@@ -417,8 +414,8 @@ export function LeftPane({
       </div>
 
       <div className="shrink-0 border-t border-border p-2">
-        <Button size="sm" variant="ghost" className="w-full" onClick={() => void load()}>
-          refresh
+        <Button size="sm" variant="ghost" className="w-full" onClick={() => void load()} disabled={reading}>
+          {reading ? 'reading…' : 'refresh'}
         </Button>
       </div>
     </div>

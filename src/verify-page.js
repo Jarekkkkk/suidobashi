@@ -296,11 +296,16 @@ for (const token of ['--background', '--foreground', '--sidebar', '--card', '--b
   const registry = fs.readFileSync('src/hires.ts', 'utf8');
   const intent = fs.readFileSync('src/verify-intent.js', 'utf8');
 
-  const filters = [...left.matchAll(/\.filter\(\s*\(?h\)?\s*=>\s*h\.name === '([a-z]+)'/g)].map((m) => m[1]);
-  check('the grants pane filters to exactly one hire', filters.length === 1,
-    `found ${filters.length} — the pane would show ${filters.length} grants`);
-  check('the pane shows the default hire', filters[0] === 'standard',
-    `filters to "${filters[0]}"`);
+  // THE PANE DOES NOT ENUMERATE HIRES AT ALL. A grant is one thing you have, not a set you
+  // choose between, so the pane offers the two things you can DO with it and lists nothing.
+  // The check is therefore the ABSENCE of a list rather than the width of a filter — and it
+  // replaced a check that asserted the filter, which passed until the list was removed.
+  check('the grants pane does not map over hires', !/hires\s*\?\?\s*\[\]\)?\.map\(/.test(left),
+    'the pane is enumerating grants again — a grant is one thing, not a list');
+  check('the grants pane does not filter by hire name', !/h\.name === '/.test(left),
+    'a hire-name comparison in the pane — the sheet targets one hire by name instead');
+  check('the sheet targets exactly one hire', /x\.name === 'standard'/.test(left),
+    'no single-hire target — the sheet would have nothing to read a baseline from');
 
   for (const name of ['standard', 'cautious']) {
     check(`the registry still holds "${name}"`, new RegExp(`^\\s+${name}: \\{`, 'm').test(registry),
