@@ -24,7 +24,7 @@ import { spawnSync } from 'node:child_process';
 import { VAULT_ID, DEPLOYER, USDC_TYPE, REWARD_TYPE, PACKAGE_LATEST_ID, POOL_TICK_SPACING, GUARD_ID, GUARD_SHARED_VERSION, SLIPPAGE_BPS } from './addresses.js';
 import { HIRES } from './hires.js';
 import { findCreatedGuard, repointAddresses } from './guard-id.js';
-import { event, endingFor } from './web/events.js';
+import { event, endingFor, type EventKind } from './web/events.js';
 import { unitsToUsdc } from './web/units.js';
 
 const PORT = Number(process.env.UI_PORT ?? 8788);
@@ -163,7 +163,7 @@ function buildWalletBundle() {
  * @param {string[]} [extra]
  * @returns {{ stdout: string, stderr: string, status: number }}
  */
-function runAgent(text, extra = []) {
+function runAgent(text: string, extra: string[] = []): { stdout: string; stderr: string; status: number } {
   const r = spawnSync(RUNTIME, ['src/agent.js', text, ...extra], {
     encoding: 'utf-8',
     timeout: 300_000,
@@ -183,26 +183,43 @@ async function hires() {
     baseUrl: 'https://fullnode.mainnet.sui.io:443',
   });
 
-  const out = [];
+  /**
+   * One row of the hires list.
+   *
+   * Declared in full rather than inline, because the object gains most of its fields AFTER its
+   * literal — and in a .ts file a JSDoc @type on the literal does not carry, so the compiler
+   * sees only the initial shape and every later assignment is an error.
+   *
+   * The chain-filled fields are optional on purpose: a failed read leaves a row with only its
+   * registry fields and an `error`, and that is a state the UI genuinely renders.
+   */
+  type HireRow = {
+    name: string;
+    policyId: string;
+    budgetSui: string;
+    feeBps: number;
+    venueId: string;
+    agent?: string;
+    suspended?: boolean;
+    venues?: number;
+    ownVenueOpen?: boolean;
+    destination?: string;
+    error?: string;
+  };
+
+  const out: HireRow[] = [];
   for (const [name, h] of Object.entries(HIRES)) {
-      // DECLARED IN FULL, because the object gains most of its fields below. Without this the
-      // compiler sees only the literal's initial shape and every later assignment is an error —
-      // which is noise here, but the same pattern would hide a genuine typo in a field name.
-      // Everything the chain fills in is optional: a failed read leaves the row with only its
-      // registry fields and an `error`, which is a state the UI renders.
-      /** @type {{
-       *   name: string, policyId: string, budgetSui: string, feeBps: number, venueId: string,
-       *   agent?: string, suspended?: boolean, venues?: number, ownVenueOpen?: boolean,
-       *   destination?: string, error?: string,
-       * }} */
-      const row = { name, policyId: h.policyId, budgetSui: h.budgetSui,
+      const row: HireRow = { name, policyId: h.policyId, budgetSui: h.budgetSui,
                     feeBps: h.venue.feeBps, venueId: h.venue.id };
     try {
       const o = await client.getObject({ objectId: h.policyId, include: { json: true } });
-      const j = (o.object ?? o).json ?? {};
+      // `any` deliberately: this is a Move struct's JSON as the chain returns it, and the shape
+      // belongs to the chain rather than to us. Declaring fields here would be a second copy of
+      // that contract, which is the drift this project keeps finding.
+      const j: any = (o.object ?? o).json ?? {};
       row.agent = j.agent;
       row.suspended = Boolean(j.suspended);
-      const list = (j.allowed_pools?.contents ?? []).map((/** @type {unknown} */ x) => String(x).toLowerCase());
+      const list: string[] = (j.allowed_pools?.contents ?? []).map((x: unknown) => String(x).toLowerCase());
       row.venues = list.length;
       // Whether this hire's OWN venue is open, read from the chain. A count alone
       // hides the difference between two hires on two different pools.
@@ -242,7 +259,7 @@ function prunePending() {
  * @param {string} stdout
  * @returns {any}
  */
-function firstJson(stdout) {
+function firstJson(stdout: string): any {
   const s = stdout || '';
   const start = s.indexOf('{');
   for (let end = s.length; end > start && start >= 0; end--) {
@@ -296,7 +313,7 @@ function firstJson(stdout) {
  * @param {bigint} feeOut
  * @returns {bigint | null}
  */
-function quoteMinOut(amountMist, feeOut) {
+function quoteMinOut(amountMist: bigint, feeOut: bigint): bigint | null {
   const r = spawnSync(RUNTIME, ['src/advisor.js', String(amountMist)], {
     encoding: 'utf-8', timeout: 60_000,
   });
@@ -321,6 +338,39 @@ function quoteMinOut(amountMist, feeOut) {
 const RUNTIME = process.env.SUI_RUNTIME || 'bun';
 
 /**
+ * The request body, as the routes pass it to the dispatcher.
+ *
+ * NAMED FIELDS rather than `any` or `unknown`, and both alternatives were tried:
+ *
+ *   Record<string, any>      compiles, and gives every caller no contract at all
+ *   Record<string, unknown>  honest, and breaks every read — `body.hire` becomes `{}` and the
+ *                            code that passes it where a string is expected stops compiling
+ *
+ * Every field is optional because each action reads a different subset, and the dispatcher
+ * refuses what it needs rather than trusting the caller. The string fields are strings because
+ * that is what a form and JSON both produce — they are parsed by `toMist`, which takes unknown
+ * precisely so a malformed value becomes null rather than a wrong number.
+ */
+type ActionBody = {
+  kind?: string;
+  text?: string;
+  hire?: string;
+  agent?: string;
+  venue?: string;
+  orderId?: string;
+  amountMist?: string;
+  minOutUsdc?: string;
+  feeOutUsdc?: string;
+  fixAmountUsdc?: string;
+  supplySui?: string;
+  boundBps?: string;
+  suspended?: boolean;
+  allow?: boolean;
+  tickLower?: number;
+  tickUpper?: number;
+};
+
+/**
  * Parse a decimal string of base units, or null if it is not one.
  *
  * NULL MEANS ABSENT OR UNPARSEABLE. This used to coerce an absent value to '0' before
@@ -339,7 +389,7 @@ const RUNTIME = process.env.SUI_RUNTIME || 'bun';
  * @param {unknown} v
  * @returns {bigint | null}
  */
-function toMist(v) {
+function toMist(v: unknown): bigint | null {
   if (v === undefined || v === null) return null;
   const s = String(v).trim();
   if (s === '') return null;
@@ -378,7 +428,13 @@ const GUARD_MAX_WIDTH = 2_000;
  * @param {Record<string, any>} body
  * @returns {{ script?: string, env?: Record<string, string>, proposal?: Record<string, unknown>, error?: string, refused?: unknown }}
  */
-function actionFor(kind, body) {
+function actionFor(kind: string, body: ActionBody): {
+  script?: string;
+  env?: Record<string, string>;
+  proposal?: Record<string, unknown>;
+  error?: string;
+  refused?: unknown;
+} {
   if (kind === 'swap') {
     const doc = firstJson(runAgent(body.text || '').stdout);
     if (!doc) return { error: 'could not parse a proposal from the agent' };
@@ -422,7 +478,7 @@ function actionFor(kind, body) {
   }
   if (kind === 'venue') {
     if (!body.hire || !(body.hire in HIRES)) return { error: 'unknown hire' };
-    const venue = body.venue || HIRES[body.hire].venue.id;
+    const venue = body.venue || HIRES[body.hire as keyof typeof HIRES].venue.id;
     const allow = body.allow !== false;
     return {
       script: 'src/hire-agent.js --allowlist',
@@ -561,13 +617,24 @@ function actionFor(kind, body) {
     //
     // The form always sends a fee (an empty field is refused, not defaulted), so this
     // only ever applies to an order the agent read from text.
-    const feeOut = body.feeOutUsdc != null ? toMist(body.feeOutUsdc) : 10_000n;
+    // `toMist` returns null for an unparseable value, and this did not check it — so a fee that
+    // was present but not a number became `String(null)`, which is the four characters "null",
+    // and that is what would have been sent as ORDER_FEE_OUT. The form refuses an empty field,
+    // so this needed a malformed one rather than an absent one to fire.
+    const feeRaw = body.feeOutUsdc != null ? toMist(body.feeOutUsdc) : 10_000n;
+    if (feeRaw === null) {
+      return { error: 'feeOutUsdc must be a non-negative integer' };
+    }
+    const feeOut = feeRaw;
 
     // The floor is REQUIRED here, unlike a swap whose bound the policy enforces at
     // execution. An order fixes its floor at creation and the settlement asserts against
     // that number later, so it has to be named now. From the form it is typed; from the
     // chat it comes from a live quote, with the fee taken out of the same budget.
-    const minOut = body.minOutUsdc != null ? toMist(body.minOutUsdc) : quoteMinOut(amount, feeOut);
+    // Bound to a const so the check above survives the narrowing: `amount` is a `let` that the
+    // branch reassigns, and TypeScript will not carry the null-check past that reassignment.
+    const escrow = amount;
+    const minOut = body.minOutUsdc != null ? toMist(body.minOutUsdc) : quoteMinOut(escrow, feeOut);
     if (minOut === null || minOut <= 0n) {
       return {
         error: 'no floor is available for this order — either minOutUsdc was not a positive '
@@ -684,7 +751,7 @@ let activeGuard = { id: GUARD_ID, version: GUARD_SHARED_VERSION };
  *
  * @param {string} digest
  */
-function adoptGuardFrom(digest) {
+function adoptGuardFrom(digest: string) {
   const r = spawnSync('sui', ['client', 'tx-block', digest, '--json'],
     { encoding: 'utf-8', timeout: 120_000 });
 
@@ -746,7 +813,7 @@ function adoptGuardFrom(digest) {
  * @param {unknown} message
  * @returns {string}
  */
-function explainAbort(message) {
+function explainAbort(message: unknown): string {
   const m = String(message || '');
   if (m.includes('borrow_child_object') && m.includes('abort code: 1')) {
     // Deliberately does not say "open a position first". That was the first version
@@ -815,7 +882,12 @@ async function outstandingOrders() {
     limit: SCAN,
     order: 'descending',
   });
-  const digests = (list.transactions ?? []).map((t) => (t.Transaction ?? t).digest).filter(Boolean);
+  // `Transaction` and `FailedTransaction` are different shapes and only the first has a digest.
+  // This is a documented trap in NOTES — the earlier code read the success shape alone and
+  // reported digest: null for precisely the failures the --no-simulate mode exists to produce.
+  const digests = (list.transactions ?? [])
+    .map((t: any) => t.Transaction?.digest ?? t.FailedTransaction?.digest)
+    .filter(Boolean) as string[];
 
   // The created ids from each transaction. Sequential rather than parallel: this is a chain
   // read per transaction and a burst of them is how a public node starts rate-limiting.
@@ -836,13 +908,13 @@ async function outstandingOrders() {
   // ONE batched read for every candidate, rather than one each. The type check happens here
   // because a create also mints other objects — the coin, for instance — and `order::Order`
   // is what distinguishes them.
-  const got = await client.getObjects({ objectIds: [...ids], include: { json: true } });
-  const rows = got.objects ?? got.data ?? [];
+  const got = await client.getObjects({ objectIds: [...ids] as string[], include: { json: true } });
+  const rows: any[] = (got as any).objects ?? [];
 
   const orders = [];
   let orderObjects = 0;
   for (const row of rows) {
-    const o = row.object ?? row;
+    const o: any = row.object ?? row;
     const type = String(o.type ?? '');
     if (!type.includes('::order::Order<')) continue;
     orderObjects++;
@@ -887,7 +959,7 @@ async function outstandingOrders() {
  * @param {string} digest
  * @returns {string | null}
  */
-function findCreatedOrder(digest) {
+function findCreatedOrder(digest: string): string | null {
   const r = spawnSync('sui', ['client', 'tx-block', digest, '--json'],
     { encoding: 'utf-8', timeout: 120_000 });
   let doc;
@@ -896,7 +968,7 @@ function findCreatedOrder(digest) {
   } catch {
     return null;
   }
-  const created = (doc.objectChanges || []).find((/** @type {any} */ c) => c.type === 'created'
+  const created = (doc.objectChanges || []).find((c: any) => c.type === 'created'
     && String(c.objectType || '').includes('::order::Order<'));
   return created?.objectId ?? null;
 }
@@ -914,7 +986,7 @@ function findCreatedOrder(digest) {
  * @param {unknown} e
  * @returns {string}
  */
-function errText(e) {
+function errText(e: unknown): string {
   if (e instanceof Error) return e.message;
   return typeof e === 'string' ? e : (JSON.stringify(e) ?? String(e));
 }
@@ -935,7 +1007,7 @@ function errText(e) {
  * @param {Record<string, unknown>} [detail]
  * @returns {string}
  */
-function ending(kind, detail) {
+function ending(kind: EventKind, detail?: Record<string, unknown>): string {
   const text = endingFor(kind, detail);
   if (text === null) {
     throw new Error(`no ending wording for "${kind}" — it is not a terminal kind`);
@@ -952,9 +1024,19 @@ function ending(kind, detail) {
  * @param {Record<string, any>} body
  * @returns {{ id?: string, bytes?: string, proposal?: Record<string, unknown>, error?: string, refused?: unknown }}
  */
-function build(kind, body) {
+function build(kind: string, body: ActionBody): {
+  id?: string;
+  bytes?: string;
+  proposal?: Record<string, unknown>;
+  error?: string;
+  refused?: unknown;
+} {
   const a = actionFor(kind, body);
   if (a.error || a.refused) return a;
+  // The script is optional on the dispatcher's return type — an error or a refusal is the other
+  // shape. Checked rather than asserted, because a branch added without a script should refuse
+  // here rather than fail on `undefined.split`.
+  if (!a.script) return { error: `no script for "${kind}"` };
 
   // The script string names the FILE; the runtime is the constant above, so converting a file
   // to .ts is a one-word edit here rather than a hunt through thirteen strings.
@@ -1005,7 +1087,13 @@ function build(kind, body) {
  * @param {string} signature
  * @returns {{ digest?: string, status?: string, output?: string, guard?: unknown, error?: string }}
  */
-function submit(id, signature) {
+function submit(id: string, signature: string): {
+  digest?: string;
+  status?: string;
+  output?: string;
+  guard?: unknown;
+  error?: string;
+} {
   const entry = pending.get(id);
   if (!entry) return { error: 'unknown or expired build id — build it again' };
   pending.delete(id); // single use, regardless of outcome
@@ -1040,8 +1128,7 @@ async function state() {
     network: 'mainnet',
     baseUrl: 'https://fullnode.mainnet.sui.io:443',
   });
-  /** @param {string} owner @param {string} coinType */
-  const at = async (owner, coinType) => {
+  const at = async (owner: string, coinType: string) => {
     const b = await client.getBalance({ owner, coinType });
     return b.balance?.balance ?? '0';
   };
@@ -1224,8 +1311,7 @@ const PAGE = `<!doctype html>
 //
 // Loud, not silent: both handlers name the error and its first frames, because a crash that
 // leaves no trace is how this one hid.
-/** @param {string} label @param {unknown} err */
-const complain = (label, err) => {
+const complain = (label: string, err: unknown) => {
   const e = err instanceof Error ? err : new Error(String(err));
   console.error(`\n!! ${label}: ${errText(e)}`);
   console.error((e.stack ?? '').split('\n').slice(1, 4).join('\n'));
@@ -1235,8 +1321,7 @@ process.on('uncaughtException', (e) => complain('uncaught exception', e));
 process.on('unhandledRejection', (e) => complain('unhandled rejection', e));
 
 const server = http.createServer((req, res) => {
-  /** @param {number} code @param {string} body @param {string} [type] */
-  const send = (code, body, type = 'application/json') => {
+  const send = (code: number, body: string, type = 'application/json') => {
     res.writeHead(code, { 'Content-Type': type });
     res.end(body);
   };
@@ -1258,9 +1343,15 @@ const server = http.createServer((req, res) => {
   //
   // Names are matched literally above, so the path handed to readFileSync is never
   // derived from the request and cannot be steered out of src/web/.
-  const moduleRoutes = { '/page.js': 'page.js', '/markup.js': 'markup.js', '/units.js': 'units.js', '/events.js': 'events.js' };
-  if (req.method === 'GET' && moduleRoutes[req.url]) {
-    const name = moduleRoutes[req.url];
+  // Indexed by a request path, so it needs a signature: without one TypeScript treats the
+  // literal's keys as the only valid ones, which is right for the four routes that exist and
+  // wrong for the lookup that decides whether a path IS one of them.
+  const moduleRoutes: Record<string, string> = { '/page.js': 'page.js', '/markup.js': 'markup.js', '/units.js': 'units.js', '/events.js': 'events.js' };
+  // `req.url` is optional on the request type, so it is defaulted rather than asserted: an
+  // absent url should miss every route, which is what an empty string does.
+  const url = req.url ?? '';
+  if (req.method === 'GET' && moduleRoutes[url]) {
+    const name = moduleRoutes[url];
     try {
       return send(200, fs.readFileSync(`src/web/${name}`, 'utf8'),
         'text/javascript; charset=utf-8');
@@ -1355,7 +1446,7 @@ const server = http.createServer((req, res) => {
         // is not a transport failure — it is the gate doing its job.
         const events = out.error || out.refused
           ? [event('refused', 'pipeline', ending('refused', {
-            reason: (out.refused && out.refused.validation && out.refused.validation.reason)
+            reason: ((out.refused as any)?.validation?.reason)
               || out.refused || out.error,
           }))]
           : [event('building', 'pipeline', 'the transaction is built and simulated')];
