@@ -21,7 +21,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { VAULT_ID, DEPLOYER, USDC_TYPE, REWARD_TYPE, PACKAGE_LATEST_ID, POOL_TICK_SPACING, GUARD_ID, GUARD_SHARED_VERSION, SLIPPAGE_BPS } from './addresses.js';
+import { VAULT_ID, VAULT_SHARED_VERSION, DEPLOYER, USDC_TYPE, SUI_TYPE, REWARD_TYPE, PACKAGE_LATEST_ID, POOL_TICK_SPACING, GUARD_ID, GUARD_SHARED_VERSION, SLIPPAGE_BPS } from './addresses.js';
 import { HIRES } from './hires.js';
 import { MARKETPLACE, describeTalents, talentFor } from './talents.js';
 import { findCreatedGuard, repointAddresses } from './guard-id.js';
@@ -194,6 +194,60 @@ async function hires() {
   });
 
   /**
+   * The OZ allowance for one cap, read from the chain.
+   *
+   * The budget is NOT a field of the policy, so `getObject` cannot see it: it lives in an
+   * OpenZeppelin `LinkedTable<BudgetKey, Allowance>` on the vault, keyed by `(cap_id, coin_type)`,
+   * and a table's contents are not in the object's JSON. Nor is there a `getDynamicField` path —
+   * a `LinkedTable` is not a dynamic field.
+   *
+   * What DOES work is calling the module's own view through a simulation. `simulateTransaction`
+   * with `include: { commandResults: true }` returns each command's return values, and
+   * `spend_vault::allowance<T>(vault, cap_id)` is a plain public view — no clock, no accumulator
+   * root. Verified: it returns 10000000 for a 0.01 SUI grant.
+   *
+   * The JSON-RPC client's `devInspectTransactionBlock` would be the obvious route and is GONE —
+   * public fullnodes answer "JSON-RPC on public fullnodes has been deprecated". This is the gRPC
+   * replacement, and finding it is why the budget was stale for as long as it was.
+   *
+   * Returns null on any failure, because a missing number must not read as a zero budget.
+   */
+  async function allowanceMist(capId: string): Promise<bigint | null> {
+    try {
+      const { Transaction } = await import('@mysten/sui/transactions');
+      const tx = new Transaction();
+      // A read still needs a sender; nothing is signed or executed, so any address will do.
+      tx.setSender(DEPLOYER);
+      tx.moveCall({
+        target: `${PACKAGE_LATEST_ID}::spend_vault::allowance`,
+        typeArguments: [SUI_TYPE],
+        arguments: [
+          tx.sharedObjectRef({
+            objectId: VAULT_ID,
+            initialSharedVersion: VAULT_SHARED_VERSION,
+            mutable: false,
+          }),
+          tx.pure.id(capId),
+        ],
+      });
+      const bytes = await tx.build({ client });
+      const res: any = await client.simulateTransaction({
+        transaction: bytes,
+        include: { commandResults: true },
+      });
+      const rv = res?.commandResults?.[0]?.returnValues?.[0]?.bcs;
+      if (!rv) return null;
+      // A Move u64 arrives as little-endian BCS bytes.
+      const b = rv instanceof Uint8Array ? rv : Uint8Array.from(rv);
+      let v = 0n;
+      for (let i = b.length - 1; i >= 0; i--) v = (v << 8n) | BigInt(b[i]);
+      return v;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * One row of the hires list.
    *
    * Declared in full rather than inline, because the object gains most of its fields AFTER its
@@ -207,6 +261,18 @@ async function hires() {
     name: string;
     policyId: string;
     budgetSui: string;
+    /**
+     * The budget read from the OZ ledger, in mist. NULL when the read failed — and null is not
+     * zero, because a failed read must not look like a budget of nothing.
+     *
+     * This is `remaining`, not the granted amount: the contract stores only `remaining` and
+     * `expires_at_ms`, so the original grant is not recoverable. After a spend this is lower than
+     * what was set, which is the honest reading — and `set_allowance` resets it.
+     */
+    budgetMist?: string | null;
+    /** The registry's figure: the ORIGINAL grant, which drifts the moment anyone changes the
+     *  budget. Kept only so the UI can say where a number came from when the read fails. */
+    budgetLocalSui: string;
     feeBps: number;
     venueId: string;
     agent?: string;
@@ -226,6 +292,7 @@ async function hires() {
   const out: HireRow[] = [];
   for (const [name, h] of Object.entries(HIRES)) {
       const row: HireRow = { name, policyId: h.policyId, budgetSui: h.budgetSui,
+                    budgetLocalSui: h.budgetSui,
                     feeBps: h.venue.feeBps, venueId: h.venue.id };
     try {
       const o = await client.getObject({ objectId: h.policyId, include: { json: true } });
@@ -238,6 +305,11 @@ async function hires() {
       const list: string[] = (j.allowed_pools?.contents ?? []).map((x: unknown) => String(x).toLowerCase());
       row.venueIds = list;
       row.venues = list.length;
+      // The budget, from the LEDGER rather than from hires.ts. Read after the policy object so a
+      // failure here leaves the registry figure visible beside the error rather than blank.
+      const mist = await allowanceMist(h.capId);
+      row.budgetMist = mist === null ? null : mist.toString();
+      if (mist !== null) row.budgetSui = (Number(mist) / 1e9).toString();
       // Whether this hire's OWN venue is open, read from the chain. A count alone
       // hides the difference between two hires on two different pools.
       row.ownVenueOpen = list.includes(String(h.venue.id).toLowerCase());

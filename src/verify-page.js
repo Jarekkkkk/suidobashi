@@ -343,6 +343,38 @@ for (const token of ['--background', '--foreground', '--sidebar', '--card', '--b
     `guard at ${guardAt}, use at ${useAt} — the value is read before it is checked`);
 }
 
+/*
+ * The budget must come from the LEDGER, not from the registry.
+ *
+ * `hires.ts` carries a `budgetSui` that is the ORIGINAL grant, and `/api/hires` handed it out as
+ * the current budget — so the policy panel showed 0.03 for a hire whose allowance had been set to
+ * 0.01, and the old page had known all along (it labelled the figure "local").
+ *
+ * The registry figure drifts the moment anyone calls set_allowance, which is the whole point of
+ * the field, so this asserts the route reads the chain and does not pass the constant through.
+ */
+{
+  const ui = fs.readFileSync('src/ui.ts', 'utf8');
+  // The WHOLE file, not a slice from `async function hires()`. The allowance read is a NESTED
+  // function inside it, so searching for the next `async function` cut the region off before the
+  // body — and the checks read an empty string and failed against nothing. Three of them reported
+  // FAIL on correct code, which is the same class of mistake as the substring check earlier.
+  const fn = ui;
+
+  check('the hires route reads the OZ allowance from the chain',
+    fn.includes('spend_vault::allowance'),
+    'no allowance read — the budget is a registry constant again');
+  check('the ledger value overwrites the registry figure',
+    /row\.budgetSui = \(Number\(mist\) \/ 1e9\)/.test(fn),
+    'the chain figure is read but not used for budgetSui');
+  check('a failed read is null, not zero',
+    fn.includes('budgetMist = mist === null ? null'),
+    'a failed read would render as a budget of nothing');
+  check('the registry figure is kept separately, labelled',
+    fn.includes('budgetLocalSui:'),
+    'no local figure — the UI cannot say where a number came from when the read fails');
+}
+
 if (failures) {
   console.error(`\n${failures} check(s) failed.`);
   process.exit(1);

@@ -142,7 +142,10 @@ export function PolicySheet({
             />
           </Field>
 
-          <Field label="budget" hint="the ceiling. saving this resets what has been spent.">
+          <Field
+            label="budget"
+            hint="read from the OpenZeppelin ledger, and it is what is LEFT, not what was granted — the contract stores only the remaining figure, so the original grant is not recoverable. typing a new number sets it and resets the spent counter."
+          >
             <div className="flex items-center gap-2">
               <input
                 className={cn(inputCls, 'flex-1')}
