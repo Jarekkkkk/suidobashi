@@ -4,6 +4,7 @@ import { signAndSubmit } from '@/lib/flow';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { SourceAvatar } from '@/components/Avatar';
+import { Bubble, BubbleContent, BubbleReactions } from '@/components/ui/bubble';
 
 /*
  * The chat: the core loop, and the reclaim that follows it.
@@ -56,6 +57,8 @@ export function Chat({
 }) {
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
+  /** The progress lines of a FINISHED flow, shown on request. */
+  const [showSteps, setShowSteps] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
 
   // Keep the newest line in view. The pipeline narrates as it goes, so the interesting part is
@@ -248,6 +251,20 @@ export function Chat({
 
   const empty = events.length === 0;
 
+  // WHAT WAS SAID GETS A BUBBLE; WHAT HAPPENED GETS A LINE.
+  //
+  // A response is addressed to you. Progress is the machine narrating itself, and bubbling it
+  // would give it the same weight as an answer — the opposite of what the four source colours
+  // are for. So `ask` and the terminal outcomes are bubbles, everything else is a quiet row.
+  const isSaid = (e: Event) => e.kind === 'ask' || e.terminal;
+
+  // A FINISHED FLOW COLLAPSES ITS STEPS. Eight progress lines above an answer push the answer up
+  // the screen, and once the flow has ended the steps are the record rather than the point. While
+  // it is RUNNING they stay visible, because then they ARE the point.
+  const lastTerminal = events.reduce((at, e, i) => (e.terminal ? i : at), -1);
+  const steps = events.filter((e, i) => !isSaid(e) && i < lastTerminal).length;
+  const hidden = !showSteps && steps > 0;
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto">
@@ -269,60 +286,86 @@ export function Chat({
           </div>
         ) : (
           <div className="flex flex-col gap-0.5 px-4 py-3">
+            {/* The steps of a finished flow, folded into one line. They are the record rather than
+                the point once the flow has ended, and eight of them above an answer push the
+                answer up the screen. Still one click away, so nothing is hidden. */}
+            {hidden && (
+              <button
+                onClick={() => setShowSteps(true)}
+                className="mb-1.5 self-start rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground"
+              >
+                {steps} steps · show
+              </button>
+            )}
             {events.map((e, i) => {
               const isAsk = e.kind === 'ask';
+              const said = isSaid(e);
+
+              // Hidden only when a LATER terminal event has closed the flow. Steps still running,
+              // and steps after the last outcome, are always shown.
+              if (hidden && !said && i < lastTerminal) return null;
+
+              if (!said) {
+                return (
+                  <div
+                    key={i}
+                    className="animate-fade-in flex items-center gap-2.5 py-0.5 pl-1"
+                  >
+                    <SourceAvatar source={e.source} size={14} />
+                    <span className="min-w-0 whitespace-pre-line break-words text-[12px] leading-relaxed text-muted-foreground/70">
+                      {e.text}
+                    </span>
+                  </div>
+                );
+              }
+
               return (
                 <div
                   key={i}
                   className={cn(
-                    'animate-rise-in rounded-md px-2.5 py-1.5',
-                    // What YOU said is set apart from what the pipeline said, so the
-                    // conversation has a left and a right even in one column.
-                    isAsk && 'mt-2 bg-accent/60',
-                    e.terminal && !isAsk && 'mt-1',
+                    'flex w-full',
+                    isAsk ? 'justify-end' : 'justify-start',
+                    // Arrives from the side it belongs to.
+                    isAsk ? 'animate-send-in' : 'animate-receive-in',
+                    i > 0 && 'mt-1.5',
                   )}
                 >
-                  <div className="flex items-start gap-2.5">
-                    {/* A creature per source, in place of a text label. Four voices talk in one
-                        column — you, the model, the pipeline, the chain — and colour alone makes
-                        that a wall of tinted text. The creature turns it into a conversation
-                        with participants, which is what it actually is. */}
-                    <span title={SOURCE_TITLE[e.source]} className="mt-0.5">
-                      <SourceAvatar source={isAsk ? 'you' : e.source} />
-                    </span>
-                    <span className={cn(
-                      'min-w-0 whitespace-pre-line break-words text-[13px] leading-relaxed',
-                      e.terminal ? 'text-foreground' : 'text-muted-foreground',
-                    )}>
-                      {e.text}
-                    </span>
-                  </div>
+                  <Bubble
+                    align={isAsk ? 'end' : 'start'}
+                    // What each source IS, not just what it is called. The creature says WHO is
+                    // talking; this says their standing — advisory, unconfirmed, or a fact.
+                    title={isAsk ? 'you asked this' : SOURCE_TITLE[e.source]}
+                    // The user's own words are the strong surface; an outcome is neutral, because a
+                    // refusal is routine here and colouring it as an error would make a working
+                    // system feel broken.
+                    variant={isAsk ? 'tinted' : 'secondary'}
+                  >
+                    <BubbleContent>{e.text}</BubbleContent>
 
-                  {/* A QUESTION, ANSWERED BY CLICKING. The options are the candidates the gate
-                      could not choose between — asking is a third outcome, not a refusal, and a
-                      dead end where the user needed a choice.
+                    {/* A QUESTION, ANSWERED BY CLICKING. The options are the candidates the gate
+                        could not choose between — asking is a third outcome, not a refusal.
 
-                      The answer is the TEMPLATE plus the chosen name, not the original request:
-                      the original named two, and sending it back would ask the same question
-                      forever. */}
-                  {e.kind === 'asking' && Array.isArray(e.data?.options) && (
-                    <div className="mt-2 flex flex-wrap gap-1.5 pl-[34px]">
-                      {(e.data!.options as string[]).map((o) => (
-                        <button
-                          key={o}
-                          disabled={busy}
-                          onClick={() => void send(`use the ${o} agent to ${e.data!.template ?? ''}`)}
-                          className={cn(
-                            'rounded-md border border-brand/40 bg-brand-soft px-2.5 py-1',
-                            'text-[12px] text-brand transition-colors hover:bg-brand/20',
-                            'disabled:opacity-50',
-                          )}
-                        >
-                          {o}
-                        </button>
-                      ))}
-                    </div>
-                  )}
+                        The answer is the TEMPLATE plus the chosen name, not the original request:
+                        the original named two, and sending it back would ask forever. */}
+                    {e.kind === 'asking' && Array.isArray(e.data?.options) && (
+                      <BubbleReactions align="start" className="mt-2">
+                        {(e.data!.options as string[]).map((o) => (
+                          <button
+                            key={o}
+                            disabled={busy}
+                            onClick={() => void send(`use the ${o} agent to ${e.data!.template ?? ''}`)}
+                            className={cn(
+                              'rounded-md border border-brand/40 bg-brand-soft px-2.5 py-1',
+                              'text-[12px] text-brand transition-colors hover:bg-brand/20',
+                              'disabled:opacity-50',
+                            )}
+                          >
+                            {o}
+                          </button>
+                        ))}
+                      </BubbleReactions>
+                    )}
+                  </Bubble>
                 </div>
               );
             })}

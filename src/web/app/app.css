@@ -143,6 +143,10 @@
   --animate-pop-in: pop-in 0.18s var(--ease-out-quart);
   --animate-fade-in: fade-in 0.15s ease-out;
   --animate-rise-in: rise-in 0.2s var(--ease-out-quart);
+  /* A message arrives from the side it belongs to. `rise-in` is the same idea without direction,
+     and direction is what makes a bubble feel like it came from somewhere. */
+  --animate-send-in: send-in 0.22s var(--ease-out-quart);
+  --animate-receive-in: receive-in 0.24s var(--ease-out-quart);
 }
 
 /* ── Base ───────────────────────────────────────────────────────────── */
@@ -232,4 +236,12 @@
 @keyframes rise-in {
   from { transform: translateY(6px); opacity: 0; }
   to { transform: translateY(0); opacity: 1; }
+}
+@keyframes send-in {
+  from { transform: translateX(10px) scale(0.98); opacity: 0; }
+  to { transform: translateX(0) scale(1); opacity: 1; }
+}
+@keyframes receive-in {
+  from { transform: translateX(-10px) scale(0.98); opacity: 0; }
+  to { transform: translateX(0) scale(1); opacity: 1; }
 }
