@@ -62,7 +62,13 @@ export function Chat({ address }: { address: string | null }) {
       if (proposed.decision !== 'PROPOSED') return;
 
       // 2. BUILD — bytes, held server-side under an id.
-      const built = await api<BuildResult>('/api/build', { kind: 'swap', text: request });
+      //
+      // An ORDER, not a swap. The escrow path is the one the chat uses: a swap would draw
+      // from the vault, which is empty and always will be, while an order escrows from the
+      // maker's own wallet into something the old package versions cannot reach. The
+      // server reads the amount from the agent and derives the floor from a live quote, so
+      // the text is all that needs sending.
+      const built = await api<BuildResult>('/api/build', { kind: 'order', text: request });
       (built.events ?? []).forEach(say);
       if (built.error || !built.bytes || !built.id) {
         say({
@@ -94,6 +100,32 @@ export function Chat({ address }: { address: string | null }) {
           text: `${out.status ?? 'submitted'} — ${out.digest}`,
           terminal: true,
           data: { digest: out.digest },
+        });
+
+        // 5. FILL — hand the order to the MCP server.
+        //
+        // An order lives a minute, so this is the moment it can be filled. Nobody is
+        // watching for orders on this side: the maker tells the server the order exists,
+        // and the server decides whether the terms are worth taking. "Not filled" is
+        // therefore ROUTINE, not an error — the order expires and anyone may refund it,
+        // which is what the design expects to happen to an unattractive order.
+        say({
+          kind: 'filling',
+          source: 'pipeline',
+          text: 'asking the mcp server to fill it…',
+          terminal: false,
+        });
+        const f = await api<{ filled?: boolean; digest?: string; fee?: string; orderId?: string; why?: string }>(
+          '/api/fill', { digest: out.digest },
+        );
+        say({
+          kind: f.filled ? 'filled' : 'unfilled',
+          source: 'chain',
+          text: f.filled
+            ? `filled — ${f.digest} · fee ${f.fee} to the filler`
+            : `not filled: ${f.why ?? 'no reason given'}. It expires shortly, and anyone may refund it to you.`,
+          terminal: true,
+          data: { orderId: f.orderId, digest: f.digest },
         });
       }
     } catch (e) {
@@ -137,7 +169,10 @@ export function Chat({ address }: { address: string | null }) {
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') void send(); }}
-          placeholder={address ? 'swap 0.01 SUI to USDC' : 'connect a wallet first'}
+          // 1 SUI, not 0.01: the fee is a fixed 0.01 USDC, so a tiny escrow is refused
+          // for the tip exceeding what the maker keeps. A placeholder suggesting an amount
+          // that always fails is worse than no placeholder.
+          placeholder={address ? 'swap 1 SUI to USDC' : 'connect a wallet first'}
           disabled={busy || !address}
         />
         <Button onClick={() => void send()} disabled={busy || !text.trim() || !address}>

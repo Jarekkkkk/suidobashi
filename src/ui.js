@@ -21,7 +21,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { VAULT_ID, DEPLOYER, USDC_TYPE, REWARD_TYPE, PACKAGE_LATEST_ID, POOL_TICK_SPACING, GUARD_ID, GUARD_SHARED_VERSION } from './addresses.js';
+import { VAULT_ID, DEPLOYER, USDC_TYPE, REWARD_TYPE, PACKAGE_LATEST_ID, POOL_TICK_SPACING, GUARD_ID, GUARD_SHARED_VERSION, SLIPPAGE_BPS } from './addresses.js';
 import { HIRES } from './hires.js';
 import { findCreatedGuard, repointAddresses } from './guard-id.js';
 import { event, endingFor } from './web/events.js';
@@ -229,9 +229,75 @@ function firstJson(stdout) {
 }
 
 /** Parse a MIST amount from request input, tolerating strings. Null if unusable. */
+/**
+ * The floor for an escrowed order, from a live quote.
+ *
+ * An order needs a CONCRETE min_out. A swap does not: its protection is the policy's
+ * on-chain bound, checked at execution time. An order fixes its floor when it is created
+ * and the settlement asserts against that number later, so it cannot be left for the
+ * chain to decide — something has to name it now.
+ *
+ * The bound is SLIPPAGE_BPS, the SAME constant the swap path, the settlement and the MCP
+ * server use, so a chat-typed order and a swap agree on what "too much slippage" means.
+ * If nobody can fill inside it, the order expires and refunds — the designed outcome, not
+ * a failure.
+ *
+ * The advisor is run as a subprocess rather than reimplemented: it already prints JSON,
+ * and it refuses a quote that is off reference market. That refusal must be respected,
+ * not papered over with a guessed floor — a floor invented here would either shortchange
+ * the maker or make the order unfillable, and both look like success until money moves.
+ *
+ * ADMISSIBLE, NOT DIRECT. The advisor also reports whether a single-hop Cetus path exists,
+ * because a multi-hop route is not executable by our module. That matters for EXECUTION
+ * and not for PRICING: the filler trades the direct pool itself, while this number only
+ * has to be a real market price to anchor a floor. At 0.01 SUI the aggregator finds no
+ * direct path but does quote an admissible price, and demanding a direct path here would
+ * refuse a perfectly good floor for a reason that belongs to the other side of the trade.
+ *
+ * THE FEE COMES OUT OF THE SLIPPAGE BUDGET, not on top of it. Settlement asserts
+ * `output - fee >= min_out`, so the floor is what the maker RECEIVES while the total
+ * output has to cover the fee as well. Setting the floor at the full 99%-of-quote and then
+ * adding a fee demands MORE than the market will produce — at 0.01 SUI the required output
+ * came to 184% of the quote, an order that could never fill and would sit there looking
+ * fine until it expired. Subtracting the fee here means both the tolerance and the tip
+ * are paid for out of the same 1%, which is the only way the arithmetic closes.
+ *
+ * Returns null when the fee leaves no room — that is a real answer, not a failure to quote.
+ */
+function quoteMinOut(amountMist, feeOut) {
+  const r = spawnSync('node', ['src/advisor.js', String(amountMist)], {
+    encoding: 'utf-8', timeout: 60_000,
+  });
+  const doc = firstJson(r.stdout);
+  if (!doc || !doc.admissible) return null;
+  const out = BigInt(doc.quoteAmountOut ?? 0);
+  if (out <= 0n) return null;
+  const floor = (out * (10_000n - SLIPPAGE_BPS)) / 10_000n;
+  return floor > feeOut ? floor - feeOut : null;
+}
+
+/**
+ * Parse a decimal string of base units, or null if it is not one.
+ *
+ * NULL MEANS ABSENT OR UNPARSEABLE. This used to coerce an absent value to '0' before
+ * parsing, which made `toMist(undefined)` return 0n — so "missing" and "zero" were the
+ * same answer. That is not a cosmetic difference: it silently turned a missing order TTL
+ * into a ZERO-length order, and it made `x ?? default` dead code everywhere, because a
+ * missing value never produced the null the default was waiting for.
+ *
+ * The order-amount check below hit it a third time. Three bugs from one cause means the
+ * cause is here, not in the three call sites — every one of which already handled null
+ * correctly and was defeated by never being given one.
+ *
+ * Empty string is treated as absent rather than as zero, for the same reason: a blank
+ * input field is not a typed zero.
+ */
 function toMist(v) {
+  if (v === undefined || v === null) return null;
+  const s = String(v).trim();
+  if (s === '') return null;
   try {
-    const b = BigInt(String(v ?? '0').trim());
+    const b = BigInt(s);
     return b >= 0n ? b : null;
   } catch {
     return null;
@@ -414,13 +480,55 @@ function actionFor(kind, body) {
     // Escrow a swap order: step 1 of the escrow flow, and the ONLY step where money
     // moves. The coin leaves the wallet here and sits inside the order until someone
     // fills it or it expires.
-    const amount = toMist(body.amountMist);
-    if (amount === null || amount <= 0n) return { error: 'amountMist must be a positive integer' };
-    const minOut = toMist(body.minOutUsdc);
-    if (minOut === null || minOut <= 0n) return { error: 'minOutUsdc must be a positive integer' };
-    // Zero is the correct default for a fee, unlike the TTL case where a parsed zero
-    // silently replaced a real default. Here zero IS the default.
-    const feeOut = toMist(body.feeOutUsdc) ?? 0n;
+    //
+    // The amount can arrive two ways. From the form, as amountMist — the user typed it.
+    // From the chat, as text — and then the AGENT reads it, exactly as the swap path
+    // does, so the model is never the thing that decides a number. Both routes land on
+    // the same field, and by the time we are here the gate has already run on the text.
+    let amount = toMist(body.amountMist);
+    if (amount === null && typeof body.text === 'string') {
+      const doc = firstJson(runAgent(body.text).stdout);
+      if (doc && doc.decision === 'PROPOSED') amount = toMist(doc.plan?.env?.SWAP_MIST);
+    }
+    if (amount === null || amount <= 0n) {
+      return { error: 'amountMist must be a positive integer, or text the agent can read one from' };
+    }
+
+    // The fee is the maker's offer to whoever fills, and it defaults to the FILLER'S OWN
+    // FLOOR — MCP_MIN_FEE_OUT, 0.01 USDC. A default of zero looked reasonable and was
+    // not: the reference server refuses an order below its floor, so every chat-typed
+    // order would have been built, escrowed, and then quietly ignored until it expired.
+    // Escrowing money nobody will take is a worse outcome than a slightly higher fee.
+    //
+    // The form always sends a fee (an empty field is refused, not defaulted), so this
+    // only ever applies to an order the agent read from text.
+    const feeOut = body.feeOutUsdc != null ? toMist(body.feeOutUsdc) : 10_000n;
+
+    // The floor is REQUIRED here, unlike a swap whose bound the policy enforces at
+    // execution. An order fixes its floor at creation and the settlement asserts against
+    // that number later, so it has to be named now. From the form it is typed; from the
+    // chat it comes from a live quote, with the fee taken out of the same budget.
+    const minOut = body.minOutUsdc != null ? toMist(body.minOutUsdc) : quoteMinOut(amount, feeOut);
+    if (minOut === null || minOut <= 0n) {
+      return {
+        error: 'no floor is available for this order — either minOutUsdc was not a positive '
+          + 'integer, or a live quote could not be had, or the fee leaves no room at this size',
+      };
+    }
+
+    // A PRINCIPLED LINE, not a tuned threshold: the tip must not exceed what the maker
+    // keeps. At 0.01 SUI the quote is ~0.0118 USDC and a 0.01 fee leaves the maker 0.0017
+    // — a trade being done FOR the tip rather than with it. Both numbers are arithmetically
+    // valid and the order would fill, which is exactly why this needs saying: it would look
+    // like a success while handing over 85% of the trade. Refusing with the numbers named
+    // lets the user escrow more or offer less, and neither is something we should choose
+    // for them.
+    if (minOut < feeOut) {
+      return {
+        error: `the fee (${feeOut} USDC) is larger than what you would receive (${minOut} USDC) —`
+          + ' escrow more SUI, or offer a smaller fee',
+      };
+    }
     // A TYPO GUARD, not a security boundary. What protects the maker is their
     // SIGNATURE: every order needs wallet approval, so a tampered page cannot escrow
     // anything without it. This exists only to catch a fat-fingered amount.
