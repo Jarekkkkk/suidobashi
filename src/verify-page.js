@@ -199,6 +199,36 @@ for (const k of new Set(emitted)) {
     'a kind outside EVENT_KINDS throws inside a request handler');
 }
 
+// EVERY SCRIPT THE SERVER RUNS MUST IMPLEMENT --emit-bytes.
+//
+// The server appends the flag to whatever `actionFor` returns and takes stdout as the
+// transaction. A script that documents the flag but never reads it prints its dry-run JSON
+// instead — which becomes "the bytes" and is handed to the wallet, producing a failure inside
+// the extension that points nowhere near the cause.
+//
+// That is not hypothetical: refund-order.js was exactly that, and it cost five rounds of
+// theories about the wallet, the sender and object encodings before anyone checked whether a
+// transaction had been sent at all.
+//
+// Read from the source, like the event-kind check above, so a new script that forgets the flag
+// fails HERE rather than in someone's wallet.
+const scriptNames = [...serverSrc.matchAll(/script:\s*'node src\/([a-z0-9-]+\.js)/g)]
+  .map((m) => m[1]);
+check('the server runs at least one script', scriptNames.length > 0,
+  `found ${scriptNames.length} — the regex may have stopped matching`);
+for (const name of new Set(scriptNames)) {
+  let src = '';
+  try {
+    src = fs.readFileSync(new URL(`./${name}`, import.meta.url), 'utf-8');
+  } catch {
+    check(`src/${name} exists`, false, 'the server names a script that is not there');
+    continue;
+  }
+  check(`src/${name} implements --emit-bytes`,
+    src.includes("process.argv.includes('--emit-bytes')"),
+    'the server appends --emit-bytes; ignoring it prints JSON as if it were transaction bytes');
+}
+
 if (failures) {
   console.error(`\n${failures} check(s) failed.`);
   process.exit(1);

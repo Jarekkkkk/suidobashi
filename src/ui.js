@@ -854,6 +854,24 @@ function build(kind, body) {
     return { error: explainAbort(raw.replace(/^fatal:\s*/i, '')) };
   }
 
+  // THE OUTPUT MUST ACTUALLY BE BYTES, and this boundary is the only place that can tell.
+  //
+  // This used to trust stdout completely. refund-order.js documented `--emit-bytes` and never
+  // implemented it, so it printed its dry-run JSON instead — which became "the bytes", was
+  // handed to the wallet, and produced an internal error inside Slush that named neither the
+  // script nor the flag. Five rounds of theories about the wallet, the sender and object
+  // encodings, when the transaction had never been sent anywhere.
+  //
+  // base64 only. A JSON object, a stack trace, a warning line and an empty string all fail
+  // this, and every one of them is better refused here than decoded by a wallet.
+  if (bytes.length < 32 || !/^[A-Za-z0-9+/]+={0,2}$/.test(bytes)) {
+    return {
+      error: 'the build script did not produce transaction bytes — it printed '
+        + `${bytes.slice(0, 100)}${bytes.length > 100 ? '…' : ''}. `
+        + 'Every script the server runs must implement --emit-bytes.',
+    };
+  }
+
   prunePending();
   const id = crypto.randomUUID();
   pending.set(id, { bytes, proposal: a.proposal, at: Date.now(), kind });

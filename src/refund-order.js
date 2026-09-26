@@ -22,6 +22,7 @@ import {
   PACKAGE_LATEST_ID, SUI_TYPE, CLOCK_ID, DEPLOYER,
 } from './addresses.js';
 
+const EMIT_BYTES = process.argv.includes('--emit-bytes');
 const EXECUTE = process.argv.includes('--execute');
 const ORDER_ID = process.env.ORDER_ID || process.argv.find((a) => a.startsWith('0x'));
 
@@ -98,6 +99,18 @@ async function main() {
   });
 
   const bytes = await tx.build({ client });
+
+  // THE SERVER RUNS THIS WITH --emit-bytes AND TAKES STDOUT AS THE TRANSACTION.
+  //
+  // This was missing. The flag was documented in the header above and never read, so the
+  // script fell through to the dry-run and printed JSON — which the server passed to the
+  // wallet as if it were base64 bytes. Slush failed to decode it and reported an internal
+  // error that named neither the script nor the flag, and every other action worked because
+  // every other script implements this.
+  if (EMIT_BYTES) {
+    process.stdout.write(Buffer.from(bytes).toString('base64'));
+    return;
+  }
 
   if (!EXECUTE) {
     const res = await client.simulateTransaction({ transaction: bytes });
