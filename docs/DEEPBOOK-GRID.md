@@ -87,15 +87,22 @@ generate_proof_as_trader(balance_manager, trade_cap, ctx): TradeProof   // cap-h
 generate_proof_as_owner(balance_manager, ctx): TradeProof               // sender must be owner
 deposit_with_cap<T>(bm, deposit_cap, coin)
 withdraw_with_cap<T>(bm, withdraw_cap, amount, ctx): Coin<T>
-revoke_trade_cap(bm, cap_id, ctx)          // the only revocation fn; also kills a deposit/withdraw cap
+revoke_trade_cap(bm, trade_cap_id: &ID, ctx)   // owner-gated; takes &ID, not ID; permanent
 new_with_custom_owner_caps_v2<App: drop>(witness, registry, owner, ctx)
     : (BalanceManager, DepositCap, WithdrawCap, TradeCap)     // one call, all three caps
 ```
 
-**The user keeps an escape hatch that does not run through our code:** as BalanceManager *owner* they
-can `withdraw<T>(bm, amount, ctx)` with no cap at all, and `revoke_trade_cap` to kill trading
-outright. So a bug in the wrapper cannot trap the funds, and there are two independent stops below
-ours. This is the property that makes the design safe to deploy.
+**The user keeps two exits that do not run through our code**, and both now have tests rather than
+prose:
+
+- As BalanceManager *owner*, `withdraw<T>(bm, amount, ctx)` needs no capability at all, so a bug in
+  the wrapper cannot trap capital. `the_harshest_kill_still_leaves_the_maker_an_exit` withdraws the
+  whole balance *after* the agent's authority has been revoked.
+- `revoke_trade_cap` is owner-gated and **removes the id from the account's allowlist for good**.
+  This guard cannot accept a replacement capability, so for that guard the kill is terminal:
+  `set_paused` is the reversible stop, revocation is the one-way one.
+  `the_maker_can_kill_the_agent_without_touching_this_module` revokes, then shows the capability the
+  guard still stores no longer authorises a proof.
 
 Constraints worth knowing. Withdrawals only touch **settled** balances — funds in resting orders
 cannot be withdrawn until canceled, so a stop must `cancel_all_orders` before any withdraw. The cap
@@ -148,10 +155,21 @@ all, revoke the TradeCap — the wrapper goes inert, balances back with the user
 Agent only (`ctx.sender() == guard.agent`, not paused, inside bounds): `buy` · `sell` · `cancel` ·
 `cancel_all`.
 
-Built so far: `create`, the maker's knobs `set_agent`/`set_bounds`/`set_paused`, and the agent
-paths `buy`/`sell`/`cancel`/`cancel_all`. The maker's capital paths — `deposit`, `withdraw`,
-`stop`, `redeem` — are the remaining steps. `stop` is `set_paused(true)` plus the
+Built so far: `create`, the maker's knobs `set_agent`/`set_bounds`/`set_budget`/`set_paused`, and
+the agent paths `buy`/`sell`/`cancel`/`cancel_all`. The maker's capital paths — `deposit`,
+`withdraw`, `stop`, `redeem` — are the remaining steps. `stop` is `set_paused(true)` plus the
 `cancel_all_orders` that a paused agent can no longer do for it.
+
+Where the code diverges from this plan, and why:
+
+- The pause primitive is `set_paused(bool)` rather than a `stop`/`resume` pair: stopping is a maker
+  toggle, and cancelling the book is the part that needs the pool, so `stop` will be the pair.
+- `set_bounds` and `set_budget` are separate rather than one `set_limits`, because they change on
+  different occasions — a band is a market view, a budget is a spending decision.
+- **The budget counts what the agent asks for, never gives it back, and cannot measure fills.**
+  DeepBook never calls back, so a resting order's fate is unknowable on chain, and refunding on a
+  cancel would mean tracking every order id. It bounds the size placed, not the size filled, so a
+  grid should set it to the ladder's whole size.
 
 Dropped from the plan: the per-placement event. DeepBook already emits one and
 `place_limit_order` returns `OrderInfo`, so a guard-side copy would be a duplicate carrying the

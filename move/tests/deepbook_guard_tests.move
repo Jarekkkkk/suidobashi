@@ -32,6 +32,9 @@ const PRICE_MIN: u64 = 900;
 const PRICE_MAX: u64 = 1_100;
 const MAX_QTY: u64 = 100;
 
+/// A budget the tests that are not about the budget will never reach.
+const UNBOUNDED: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+
 /// Stand-ins for the pool's `Base`/`Quote` pair. Phantom, so any type will do.
 public struct TestBase has drop {}
 public struct TestQuote has drop {}
@@ -53,12 +56,26 @@ fun mock_balance_manager(): ID {
 
 /// A BalanceManager owned by the current sender, with one of each capability, placed under a new
 /// guard. Returns the guard id and the BalanceManager id.
+///
+/// The budget is left unbounded here so that the gate and band tests are testing the gate and the
+/// band; the budget has its own tests and its own setup.
 fun setup(
     s: &mut ts::Scenario,
     agent: address,
     price_min: u64,
     price_max: u64,
     max_qty: u64,
+): (ID, ID) {
+    setup_with_budget(s, agent, price_min, price_max, max_qty, UNBOUNDED)
+}
+
+fun setup_with_budget(
+    s: &mut ts::Scenario,
+    agent: address,
+    price_min: u64,
+    price_max: u64,
+    max_qty: u64,
+    budget: u64,
 ): (ID, ID) {
     let mut bm = balance_manager::new(s.ctx());
     let deposit_cap = balance_manager::mint_deposit_cap(&mut bm, s.ctx());
@@ -76,6 +93,7 @@ fun setup(
         price_min,
         price_max,
         max_qty,
+        budget,
         s.ctx(),
     );
 
@@ -150,6 +168,7 @@ fun the_guard_records_what_it_was_handed() {
         PRICE_MIN,
         PRICE_MAX,
         MAX_QTY,
+        UNBOUNDED,
         s.ctx(),
     );
 
@@ -672,6 +691,7 @@ fun create_refuses_a_trade_cap_from_another_account() {
         PRICE_MIN,
         PRICE_MAX,
         MAX_QTY,
+        UNBOUNDED,
         s.ctx(),
     );
     s.end();
@@ -742,5 +762,243 @@ fun a_foreign_deposit_cap_is_refused_by_deepbook_on_use() {
     transfer::public_transfer(foreign_deposit_cap, ALICE);
     transfer::public_transfer(other_account, ALICE);
     transfer::public_transfer(account, ALICE);
+    s.end();
+}
+
+// === The budget ===
+
+/// That the totals add up, which the refusal test alone cannot show: an off-by-one in the counter
+/// differs from a correct one only where the budget runs out exactly.
+#[test]
+fun the_budget_counts_every_order_it_allows() {
+    let mut s = ts::begin(ALICE);
+    let (guard_id, balance_manager_id) =
+        setup_with_budget(&mut s, OPERATOR, PRICE_MIN, PRICE_MAX, MAX_QTY, 100);
+
+    s.next_tx(OPERATOR);
+    {
+        let mut g = take(&mut s, guard_id);
+        deepbook_guard::record_order_for_testing(
+            &mut g, pool(), balance_manager_id, 1_000, 60, s.ctx(),
+        );
+        assert_eq!(deepbook_guard::committed(&g), 60);
+
+        deepbook_guard::record_order_for_testing(
+            &mut g, pool(), balance_manager_id, 1_000, 40, s.ctx(),
+        );
+        assert_eq!(deepbook_guard::committed(&g), 100);
+        assert_eq!(deepbook_guard::budget(&g), 100);
+        ts::return_shared(g);
+    };
+    s.end();
+}
+
+/// The budget bounds the total rather than one order: both orders are inside the per-order bound
+/// and inside the band, and the pair of them is still refused.
+#[test]
+#[expected_failure(abort_code = deepbook_guard::EBudgetExceeded)]
+fun the_budget_bounds_the_total_and_not_just_one_order() {
+    let mut s = ts::begin(ALICE);
+    let (guard_id, balance_manager_id) =
+        setup_with_budget(&mut s, OPERATOR, PRICE_MIN, PRICE_MAX, MAX_QTY, 100);
+
+    s.next_tx(OPERATOR);
+    {
+        let mut g = take(&mut s, guard_id);
+        deepbook_guard::record_order_for_testing(
+            &mut g, pool(), balance_manager_id, 1_000, 60, s.ctx(),
+        );
+        deepbook_guard::record_order_for_testing(
+            &mut g, pool(), balance_manager_id, 1_000, 60, s.ctx(),
+        );
+        ts::return_shared(g);
+    };
+    s.end();
+}
+
+/// A budget is spent once and topped up deliberately. Raising it requires no other change, and
+/// `committed` is what makes a top-up knowable — the maker adds to what was spent rather than
+/// guessing at a fresh total.
+#[test]
+fun the_maker_can_top_up_the_budget() {
+    let mut s = ts::begin(ALICE);
+    let (guard_id, balance_manager_id) =
+        setup_with_budget(&mut s, OPERATOR, PRICE_MIN, PRICE_MAX, MAX_QTY, 100);
+
+    s.next_tx(OPERATOR);
+    {
+        let mut g = take(&mut s, guard_id);
+        deepbook_guard::record_order_for_testing(
+            &mut g, pool(), balance_manager_id, 1_000, 100, s.ctx(),
+        );
+        assert_eq!(deepbook_guard::committed(&g), 100);
+        ts::return_shared(g);
+    };
+
+    s.next_tx(ALICE);
+    {
+        let mut g = take(&mut s, guard_id);
+        deepbook_guard::set_budget(&mut g, 200, s.ctx());
+        ts::return_shared(g);
+    };
+
+    s.next_tx(OPERATOR);
+    {
+        let mut g = take(&mut s, guard_id);
+        deepbook_guard::record_order_for_testing(
+            &mut g, pool(), balance_manager_id, 1_000, 100, s.ctx(),
+        );
+        assert_eq!(deepbook_guard::committed(&g), 200);
+        ts::return_shared(g);
+    };
+    s.end();
+}
+
+/// Lowering the budget under what the agent already asked for stops it rather than underflowing.
+/// Fail-closed, and reachable on purpose.
+#[test]
+#[expected_failure(abort_code = deepbook_guard::EBudgetExceeded)]
+fun a_budget_below_what_is_already_spent_stops_the_agent() {
+    let mut s = ts::begin(ALICE);
+    let (guard_id, balance_manager_id) =
+        setup_with_budget(&mut s, OPERATOR, PRICE_MIN, PRICE_MAX, MAX_QTY, 100);
+
+    s.next_tx(OPERATOR);
+    {
+        let mut g = take(&mut s, guard_id);
+        deepbook_guard::record_order_for_testing(
+            &mut g, pool(), balance_manager_id, 1_000, 100, s.ctx(),
+        );
+        ts::return_shared(g);
+    };
+
+    s.next_tx(ALICE);
+    {
+        let mut g = take(&mut s, guard_id);
+        deepbook_guard::set_budget(&mut g, 50, s.ctx());
+        ts::return_shared(g);
+    };
+
+    s.next_tx(OPERATOR);
+    {
+        let mut g = take(&mut s, guard_id);
+        deepbook_guard::record_order_for_testing(
+            &mut g, pool(), balance_manager_id, 1_000, 1, s.ctx(),
+        );
+        ts::return_shared(g);
+    };
+    s.end();
+}
+
+/// The budget is the money bound, so the agent must not be able to raise it — the same reason it
+/// cannot widen its own band, on the setting that matters most.
+#[test]
+#[expected_failure(abort_code = deepbook_guard::ENotMaker)]
+fun the_agent_cannot_raise_its_own_budget() {
+    let mut s = ts::begin(ALICE);
+    let (guard_id, _) = setup_in_band(&mut s, OPERATOR);
+
+    s.next_tx(OPERATOR);
+    {
+        let mut g = take(&mut s, guard_id);
+        deepbook_guard::set_budget(&mut g, UNBOUNDED, s.ctx());
+        ts::return_shared(g);
+    };
+    s.end();
+}
+
+// === The two stops that bypass this module ===
+
+/// The maker's kill switch, and it does not involve this module at all: revoke the guard's trade
+/// capability by its id. DeepBook drops the id from the account's allowlist, so the capability the
+/// guard still stores stops authorising anything.
+#[test]
+#[expected_failure(abort_code = 1)]
+fun the_maker_can_kill_the_agent_without_touching_this_module() {
+    let mut s = ts::begin(ALICE);
+
+    let mut bm = balance_manager::new(s.ctx());
+    let deposit_cap = balance_manager::mint_deposit_cap(&mut bm, s.ctx());
+    let withdraw_cap = balance_manager::mint_withdraw_cap(&mut bm, s.ctx());
+    let trade_cap = balance_manager::mint_trade_cap(&mut bm, s.ctx());
+    let trade_cap_id = object::id(&trade_cap);
+    let balance_manager_id = object::id(&bm);
+
+    let guard_id = deepbook_guard::create<TestBase, TestQuote>(
+        pool(),
+        bm,
+        deposit_cap,
+        withdraw_cap,
+        trade_cap,
+        OPERATOR,
+        PRICE_MIN,
+        PRICE_MAX,
+        MAX_QTY,
+        UNBOUNDED,
+        s.ctx(),
+    );
+
+    s.next_tx(ALICE);
+    {
+        let mut bm = ts::take_shared_by_id<BalanceManager>(&s, balance_manager_id);
+        balance_manager::revoke_trade_cap(&mut bm, &trade_cap_id, s.ctx());
+        ts::return_shared(bm);
+    };
+
+    // The guard still holds the capability; the account no longer honours it.
+    s.next_tx(OPERATOR);
+    {
+        let g = take(&mut s, guard_id);
+        let mut bm = ts::take_shared_by_id<BalanceManager>(&s, balance_manager_id);
+        deepbook_guard::generate_proof_for_testing(&g, &mut bm, s.ctx());
+        ts::return_shared(bm);
+        ts::return_shared(g);
+    };
+    s.end();
+}
+
+/// The harshest kill still leaves the maker an exit. With the agent's authority revoked there is no
+/// path left through this module, and the capital still comes out — because the withdrawal never
+/// needed this module, or any capability, in the first place.
+#[test]
+fun the_harshest_kill_still_leaves_the_maker_an_exit() {
+    let mut s = ts::begin(ALICE);
+
+    let mut bm = balance_manager::new(s.ctx());
+    balance_manager::deposit<TestCoin>(
+        &mut bm,
+        coin::mint_for_testing<TestCoin>(1_000, s.ctx()),
+        s.ctx(),
+    );
+    let deposit_cap = balance_manager::mint_deposit_cap(&mut bm, s.ctx());
+    let withdraw_cap = balance_manager::mint_withdraw_cap(&mut bm, s.ctx());
+    let trade_cap = balance_manager::mint_trade_cap(&mut bm, s.ctx());
+    let trade_cap_id = object::id(&trade_cap);
+    let balance_manager_id = object::id(&bm);
+
+    let _guard_id = deepbook_guard::create<TestBase, TestQuote>(
+        pool(),
+        bm,
+        deposit_cap,
+        withdraw_cap,
+        trade_cap,
+        OPERATOR,
+        PRICE_MIN,
+        PRICE_MAX,
+        MAX_QTY,
+        UNBOUNDED,
+        s.ctx(),
+    );
+
+    s.next_tx(ALICE);
+    {
+        let mut bm = ts::take_shared_by_id<BalanceManager>(&s, balance_manager_id);
+        balance_manager::revoke_trade_cap(&mut bm, &trade_cap_id, s.ctx());
+
+        let out = balance_manager::withdraw<TestCoin>(&mut bm, 1_000, s.ctx());
+        assert_eq!(out.value(), 1_000);
+        transfer::public_transfer(out, ALICE);
+        ts::return_shared(bm);
+    };
     s.end();
 }

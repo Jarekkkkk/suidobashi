@@ -35,11 +35,24 @@
 /// and withdraw capabilities are package-private, so those two cannot be checked the same way and
 /// are refused on first use instead.
 ///
-/// What the bounds do and do not do. They cap each order's price and size, so no single order
-/// can reach outside the band, and a paused guard places none at all. They do not cap the total:
-/// an agent can place many orders, and the ceiling on the whole thing is the BalanceManager's
-/// balance. Write the band as the honest range you would trade at anyway, because inside the band
-/// a compromised agent trades at prices you agreed to.
+/// What the limits do and do not do. Every order must sit inside the band and under the per-order
+/// quantity bound, and a paused guard places none at all. The budget caps the total: it counts
+/// every quantity the agent asks for and never gives one back, so it bounds the whole position
+/// rather than one order. It does not measure fills — DeepBook never calls back, so a resting
+/// order's eventual fate is unknowable here — and cancelling does not refund it. A grid should
+/// therefore set the budget to the ladder's whole size, and a maker who wants a second helping
+/// raises it deliberately.
+///
+/// Write the band as the honest range you would trade at anyway: inside the band, a compromised
+/// agent trades at prices you already agreed to.
+///
+/// Two stops exist that do not run through this module, which is what makes a third party's
+/// operator a small thing to trust. The maker, as BalanceManager owner, can withdraw with no
+/// capability at all, so a bug here cannot trap capital. And the maker can revoke the guard's
+/// trade capability by its id, killing every agent path outright, in a transaction that never
+/// mentions this module. That second stop is terminal for the guard: DeepBook removes the id from
+/// the account's allowlist and never re-lists it, and this guard has no way to accept a
+/// replacement capability. `set_paused` is the reversible stop; revocation is the one-way one.
 ///
 /// Creation is permissionless: any wallet holding a BalanceManager and its three caps can create
 /// a guard for any pool. No whitelist, no deploy per user. Holding the caps **is** the permission
@@ -74,6 +87,8 @@ const EPriceOutOfBand: vector<u8> = "price is outside the guard's band";
 const EQuantityAboveBound: vector<u8> = "quantity is above the guard's per-order bound";
 #[error]
 const EPriceBandInverted: vector<u8> = "price band must not be inverted";
+#[error]
+const EBudgetExceeded: vector<u8> = "order would take the agent past the guard's budget";
 
 /// Shared custody wrapper over one DeepBook v3 `BalanceManager`.
 ///
@@ -97,6 +112,10 @@ public struct DeepbookGuard<phantom Base, phantom Quote> has key {
     price_max: u64,
     /// The largest quantity one order may ask for, in the pool's lot-scaled units.
     max_qty: u64,
+    /// The total quantity the agent may ever ask for, across every order.
+    budget: u64,
+    /// How much of that budget is gone. Monotone: nothing refunds it, not even a cancel.
+    committed: u64,
     /// DeepBook capabilities, held here so that the agent needs none of its own.
     deposit_cap: DepositCap,
     withdraw_cap: WithdrawCap,
@@ -120,6 +139,7 @@ public struct GuardUpdated has copy, drop {
     price_min: u64,
     price_max: u64,
     max_qty: u64,
+    budget: u64,
 }
 
 /// Create a guard. Permissionless.
@@ -145,6 +165,7 @@ public fun create<Base, Quote>(
     price_min: u64,
     price_max: u64,
     max_qty: u64,
+    budget: u64,
     ctx: &mut TxContext,
 ): ID {
     assert!(price_min <= price_max, EPriceBandInverted);
@@ -170,6 +191,8 @@ public fun create<Base, Quote>(
         price_min,
         price_max,
         max_qty,
+        budget,
+        committed: 0,
         deposit_cap,
         withdraw_cap,
         trade_cap,
@@ -194,7 +217,7 @@ public fun create<Base, Quote>(
 /// The agent supplies parameters and nothing else. The credential that authorises this order is
 /// the one the guard holds.
 public fun buy<Base, Quote>(
-    guard: &DeepbookGuard<Base, Quote>,
+    guard: &mut DeepbookGuard<Base, Quote>,
     pool: &mut Pool<Base, Quote>,
     balance_manager: &mut BalanceManager,
     client_order_id: u64,
@@ -213,7 +236,7 @@ public fun buy<Base, Quote>(
 
 /// Place a sell for the guard's account. Agent-gated, and inside the maker's band.
 public fun sell<Base, Quote>(
-    guard: &DeepbookGuard<Base, Quote>,
+    guard: &mut DeepbookGuard<Base, Quote>,
     pool: &mut Pool<Base, Quote>,
     balance_manager: &mut BalanceManager,
     client_order_id: u64,
@@ -294,6 +317,22 @@ public fun set_bounds<Base, Quote>(
     emit_updated(guard);
 }
 
+/// Set the total quantity the agent may ever ask for. Maker-gated.
+///
+/// Raising it is a deliberate act rather than an automatic rollover, which is the point: a budget
+/// that refilled itself would bound nothing. Lowering it below what the agent has already asked
+/// for stops the agent outright until the maker raises it again — that fails closed, so it is left
+/// available rather than guarded against.
+public fun set_budget<Base, Quote>(
+    guard: &mut DeepbookGuard<Base, Quote>,
+    budget: u64,
+    ctx: &TxContext,
+) {
+    assert_caller_is_maker(guard, ctx);
+    guard.budget = budget;
+    emit_updated(guard);
+}
+
 /// Freeze or unfreeze every agent path. Maker-gated, and costs nothing.
 ///
 /// This is the maker's stop. It does not need a capability, does not cancel anything, and does
@@ -318,7 +357,7 @@ public fun set_paused<Base, Quote>(
 /// reach DeepBook for this account except through a function that checked the maker's limits
 /// first.
 fun place<Base, Quote>(
-    guard: &DeepbookGuard<Base, Quote>,
+    guard: &mut DeepbookGuard<Base, Quote>,
     pool: &mut Pool<Base, Quote>,
     balance_manager: &mut BalanceManager,
     client_order_id: u64,
@@ -338,6 +377,10 @@ fun place<Base, Quote>(
         quantity,
         ctx,
     );
+
+    // Charged from here. An abort anywhere below reverts this along with the rest of the
+    // transaction, so nothing is charged for an order that never reached DeepBook.
+    record_commitment(guard, quantity);
 
     let proof = balance_manager::generate_proof_as_trader(balance_manager, &guard.trade_cap, ctx);
 
@@ -392,6 +435,18 @@ fun assert_order_allowed<Base, Quote>(
     assert_agent_may_act(guard, pool_id, balance_manager_id, ctx);
     assert!(price >= guard.price_min && price <= guard.price_max, EPriceOutOfBand);
     assert!(quantity <= guard.max_qty, EQuantityAboveBound);
+    // Short-circuit rather than subtracting first: a maker who lowers the budget below what the
+    // agent already asked for must be refused, not underflow.
+    assert!(
+        guard.committed <= guard.budget && quantity <= guard.budget - guard.committed,
+        EBudgetExceeded,
+    );
+}
+
+/// Charge a quantity against the budget. One counter, monotone, never refunded — see the module
+/// note on what the budget does not measure.
+fun record_commitment<Base, Quote>(guard: &mut DeepbookGuard<Base, Quote>, quantity: u64) {
+    guard.committed = guard.committed + quantity;
 }
 
 fun assert_caller_is_maker<Base, Quote>(
@@ -422,6 +477,7 @@ fun emit_updated<Base, Quote>(guard: &DeepbookGuard<Base, Quote>) {
         price_min: guard.price_min,
         price_max: guard.price_max,
         max_qty: guard.max_qty,
+        budget: guard.budget,
     });
 }
 
@@ -456,6 +512,17 @@ public fun balance_manager_id<Base, Quote>(guard: &DeepbookGuard<Base, Quote>): 
 /// The band the agent may trade inside, and the per-order quantity bound.
 public fun bounds<Base, Quote>(guard: &DeepbookGuard<Base, Quote>): (u64, u64, u64) {
     (guard.price_min, guard.price_max, guard.max_qty)
+}
+
+/// The total quantity the agent may ever ask for.
+public fun budget<Base, Quote>(guard: &DeepbookGuard<Base, Quote>): u64 {
+    guard.budget
+}
+
+/// How much of the budget the agent has asked for so far. Compare against `budget` to see what is
+/// left; the maker needs this to top up by a knowable amount.
+public fun committed<Base, Quote>(guard: &DeepbookGuard<Base, Quote>): u64 {
+    guard.committed
 }
 
 /// The ids of the capabilities this guard holds.
@@ -503,6 +570,20 @@ public fun check_order_allowed_for_testing<Base, Quote>(
     ctx: &TxContext,
 ) {
     assert_order_allowed(guard, pool_id, balance_manager_id, price, quantity, ctx)
+}
+
+/// Run the gate and the counter exactly as a placement does.
+#[test_only]
+public fun record_order_for_testing<Base, Quote>(
+    guard: &mut DeepbookGuard<Base, Quote>,
+    pool_id: ID,
+    balance_manager_id: ID,
+    price: u64,
+    quantity: u64,
+    ctx: &TxContext,
+) {
+    assert_order_allowed(guard, pool_id, balance_manager_id, price, quantity, ctx);
+    record_commitment(guard, quantity);
 }
 
 /// Generate the proof an order would generate, from the cap the guard holds, against a real
