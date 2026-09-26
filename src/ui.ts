@@ -389,6 +389,19 @@ type ActionBody = {
    */
   suspended?: boolean | string;
   allow?: boolean | string;
+  /**
+   * The policy panel's budget, in mist. Distinct from `amountMist`, which the order path uses
+   * for the amount being swapped — this one is the ceiling.
+   */
+  budgetMist?: string;
+  /**
+   * Venue diffs, as id lists. NOT `allow`, which the `venue` kind already uses as the
+   * allow-or-block flag for a single pool; overloading it would have made that kind's boolean
+   * arrive as an array. `unknown` rather than `string[]` because a request can carry anything,
+   * and the route filters rather than trusting the shape.
+   */
+  allowPools?: unknown;
+  revokePools?: unknown;
   tickLower?: number;
   tickUpper?: number;
 };
@@ -520,6 +533,76 @@ function actionFor(kind: string, body: ActionBody): {
         action: allow ? 'allow swap pool' : 'block swap pool',
         hire: body.hire,
         venue,
+      },
+    };
+  }
+  if (kind === 'policy') {
+    if (!body.hire || !(body.hire in HIRES)) return { error: 'unknown hire' };
+
+    // ONLY WHAT CHANGED. Every field is individually optional and an absent one produces no
+    // instruction at all — which is what makes this a patch rather than an overwrite. It
+    // matters most for the budget: `set_allowance` upserts the ledger entry in place,
+    // including resetting the spend tracking, so sending it on every save would quietly
+    // restore an exhausted hire's ceiling every time the owner changed a venue.
+    const env: Record<string, string> = { HIRE: body.hire };
+    const steps: string[] = [];
+
+    if (typeof body.agent === 'string' && body.agent) {
+      env.AGENT = body.agent;
+      steps.push('agent');
+    }
+    // The bound travels with the agent in the same transaction, because a grant handed over
+    // without a price bound — even for one instruction — is the case the bound exists for.
+    if (body.boundBps !== undefined && body.boundBps !== null && body.boundBps !== '') {
+      env.BOUND_BPS = String(body.boundBps);
+      steps.push('bound');
+    }
+    // COMPARED, NOT TESTED FOR TRUTHINESS — the bug `suspend` and `venue` both had. A form
+    // sends strings, so "false" is truthy and a request to resume would suspend. Here the
+    // check is `typeof … === 'boolean'`, which is stricter still: a string is not a decision
+    // to change anything, so it produces no instruction rather than a wrong one.
+    if (typeof body.suspended === 'boolean') {
+      env.SUSPENDED = body.suspended ? 'true' : 'false';
+      steps.push(body.suspended ? 'suspend' : 'resume');
+    }
+    if (body.budgetMist !== undefined && body.budgetMist !== null && body.budgetMist !== '') {
+      const mist = toMist(body.budgetMist);
+      if (mist === null) return { error: 'budgetMist must be a non-negative integer' };
+      env.BUDGET_MIST = String(mist);
+      steps.push('budget');
+    }
+
+    // Venues are a SET on chain, so the panel sends a diff rather than a list: it knows what
+    // it changed, and nothing has to read the policy back to work out the difference.
+    const venueIds = (v: unknown): string[] =>
+      Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.length > 0) : [];
+    const allow = venueIds(body.allowPools);
+    const revoke = venueIds(body.revokePools);
+    if (allow.length) {
+      env.ALLOW = allow.join(',');
+      steps.push(`allow ${allow.length}`);
+    }
+    if (revoke.length) {
+      env.REVOKE = revoke.join(',');
+      steps.push(`revoke ${revoke.length}`);
+    }
+
+    // Setting nothing would build a valid transaction that costs gas and changes nothing, and
+    // would read as success. The script refuses it too; refusing here names the field.
+    if (!steps.length) return { error: 'nothing to change' };
+
+    return {
+      script: 'src/set-policy.ts',
+      env,
+      proposal: {
+        action: 'set policy',
+        hire: body.hire,
+        steps,
+        budgetSui: env.BUDGET_MIST ? (Number(env.BUDGET_MIST) / 1e9).toString() : undefined,
+        agent: env.AGENT,
+        suspended: typeof body.suspended === 'boolean' ? body.suspended : undefined,
+        allow,
+        revoke,
       },
     };
   }
