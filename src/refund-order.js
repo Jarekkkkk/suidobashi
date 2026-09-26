@@ -19,7 +19,7 @@
  */
 import 'dotenv/config';
 import {
-  PACKAGE_LATEST_ID, POLICY_ID, SUI_TYPE, CLOCK_ID, CLOCK_SHARED_VERSION,
+  PACKAGE_LATEST_ID, SUI_TYPE, CLOCK_ID, CLOCK_SHARED_VERSION, DEPLOYER,
 } from './addresses.js';
 
 const EXECUTE = process.argv.includes('--execute');
@@ -42,14 +42,32 @@ async function main() {
   if (!sharedVersion) throw new Error(`${ORDER_ID} is not a shared object — an order should be`);
   const expiresAtMs = Number(o.json?.expires_at_ms ?? 0);
 
-  // The signer is whoever runs it. Refund is ungated on chain, so this is only about
-  // who pays gas — not about who receives, which is always the maker.
-  const signerAddress = process.env.AGENT_ADDRESS
-    || (await (async () => {
-      const p = await client.getObject({ objectId: POLICY_ID, include: { json: true } });
-      return (p.object ?? p).json?.agent;
-    })());
-  if (!signerAddress) throw new Error('no signer address — set AGENT_ADDRESS');
+  // THE SENDER MUST BE WHOEVER SIGNS.
+  //
+  // Refund is permissionless on chain — anyone may call it, and the funds always go to the
+  // MAKER, not the caller — so the sender decides only who pays gas. That means it has to be
+  // the address the wallet will actually sign as.
+  //
+  // It used to default to the POLICY'S AGENT, which is the server's address. That was right
+  // while the server executed the refund with its own key, and wrong the moment the browser
+  // signed: the transaction named one address while the wallet signed as another. Slush
+  // refused with "Cannot read properties of undefined (reading 'owner')" — an error about
+  // looking up a sender's account, which is exactly what a mismatched sender produces, and
+  // which points at the extension rather than at the line that caused it.
+  //
+  // --execute still signs with AGENT_SECRET_KEY, so in that mode the sender comes from the
+  // key. Read BEFORE the bytes are built, because the sender is part of what gets signed.
+  let signer = null;
+  if (EXECUTE) {
+    const secret = process.env.AGENT_SECRET_KEY;
+    if (!secret) throw new Error('AGENT_SECRET_KEY is required for --execute');
+    const { Ed25519Keypair } = await import('@mysten/sui/keypairs/ed25519');
+    const { decodeSuiPrivateKey } = await import('@mysten/sui/cryptography');
+    signer = Ed25519Keypair.fromSecretKey(decodeSuiPrivateKey(secret).secretKey);
+  }
+
+  const signerAddress = signer ? signer.toSuiAddress() : (process.env.SUI_SENDER || DEPLOYER);
+  if (!signerAddress) throw new Error('no sender address — set SUI_SENDER');
 
   const tx = new Transaction();
   tx.setSender(signerAddress);
@@ -89,13 +107,6 @@ async function main() {
     if (!ok) process.exit(1);
     return;
   }
-
-  const secret = process.env.AGENT_SECRET_KEY;
-  if (!secret) throw new Error('AGENT_SECRET_KEY is required for --execute');
-  const { Ed25519Keypair } = await import('@mysten/sui/keypairs/ed25519');
-  const { decodeSuiPrivateKey } = await import('@mysten/sui/cryptography');
-  const { secretKey } = decodeSuiPrivateKey(secret);
-  const signer = Ed25519Keypair.fromSecretKey(secretKey);
 
   const sent = await client.signAndExecuteTransaction({ transaction: bytes, signer });
   const result = sent?.Transaction ?? sent?.FailedTransaction ?? sent ?? {};
