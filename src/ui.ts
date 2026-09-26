@@ -1374,7 +1374,11 @@ const server = http.createServer((req, res) => {
     const name = path.basename((req.url ?? '').split('?')[0]);
     if (!/^[a-z0-9-]+\.woff2$/.test(name)) return send(404, 'not found', 'text/plain; charset=utf-8');
     try {
-      const file = fs.readFileSync(
+      // Annotated explicitly because two configs were disagreeing about it. `readFileSync`
+      // without an encoding returns a Buffer, which IS a Uint8Array — the compiler agreed
+      // with that and the editor did not, depending on which tsconfig each had loaded. Saying
+      // the type rather than inferring it removes the question, and costs nothing.
+      const file: Uint8Array = fs.readFileSync(
         path.join('node_modules/@fontsource-variable/inter/files', name));
       return send(200, file, 'font/woff2');
     } catch {

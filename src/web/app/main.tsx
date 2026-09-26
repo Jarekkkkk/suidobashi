@@ -1,13 +1,17 @@
 /*
- * The React entry.
+ * The React entry and the shell.
  *
- * Ported from src/web/page.js, which stays in the tree until this is confirmed working —
- * the old UI is the reference to check the port against, and deleting it first would
- * throw away the only thing that can tell us the port is faithful.
+ * LAYOUT IS FLEX, NOT A FIXED GRID. The previous version used grid-cols with hardcoded pixel
+ * widths, which meant the panes were a fixed composition rather than three regions that share
+ * the space — and at any width the author had not pictured, something was slightly wrong.
  *
- * This step moves the wallet connection and the chat loop across. The order form, the
- * owner actions and the panes' remaining content come next; they are additions to a
- * working shell rather than part of proving the shell works.
+ * The panes now differ by SURFACE, not only by a hairline border: the sidebar has its own
+ * colour, the signing pane sits on the card colour, and the conversation is the page. That is
+ * the whole reason a three-pane layout reads as one workspace instead of three boxes.
+ *
+ * Ported from src/web/page.js, which stays in the tree until this is confirmed working — the
+ * old UI is the reference to check the port against, and deleting it first would throw away the
+ * only thing that can tell us the port is faithful.
  */
 import { createRoot } from 'react-dom/client';
 import { useState, useEffect, useCallback } from 'react';
@@ -23,8 +27,8 @@ import { cn } from '@/lib/utils';
  * The wallet bundle is a separate script and may not have run yet when this app mounts.
  *
  * Rather than assume script order — which would break the moment either file is loaded
- * differently — poll briefly for the bridge to appear. Bounded, so a genuinely missing
- * wallet bundle surfaces as a message instead of a spinner that never resolves.
+ * differently — poll briefly for the bridge to appear. Bounded, so a genuinely missing wallet
+ * bundle surfaces as a message instead of a spinner that never resolves.
  */
 function useWalletBridge() {
   const [ready, setReady] = useState(() => wallet() !== null);
@@ -82,23 +86,30 @@ function App() {
   }
 
   return (
-    <div className={cn(
-      'grid h-full',
-      'grid-cols-1 md:grid-cols-[240px_1fr] xl:grid-cols-[240px_1fr_400px]',
-    )}>
-      {/* Left — what is installed, and what is left over. */}
-      <aside className="hidden overflow-hidden border-r border-white/10 md:block">
+    <div className="flex h-full min-w-0 overflow-hidden bg-background text-foreground">
+      {/* Left — what is installed, and what is left over. Its own surface, so it reads as a
+          region of the app rather than as a box with a border. */}
+      <aside className={cn(
+        'hidden w-[260px] shrink-0 flex-col border-r border-border bg-sidebar',
+        'md:flex',
+      )}>
         <LeftPane events={events} say={say} onTerms={setTerms} />
       </aside>
 
-      {/* Centre — the chat. */}
-      <main className="flex min-w-0 flex-col">
-        <header className="flex items-center gap-3 border-b border-white/10 px-4 py-3">
-          <span className="font-semibold">sui-tokyo</span>
+      {/* Centre — the conversation. The page colour, because it is the thing you look at. */}
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
+        <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border px-4">
+          <span className="text-[13px] font-medium tracking-tight">sui-tokyo</span>
+          <span className="rounded-sm bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+            on-device agent wallet
+          </span>
+
           <div className="ml-auto flex items-center gap-2">
             {address ? (
               <>
-                <span className="font-mono text-xs text-white/50">{short(address)}</span>
+                <span className="font-mono text-[11px] text-muted-foreground">
+                  {short(address)}
+                </span>
                 <Button variant="ghost" size="sm" onClick={() => void disconnect()}>
                   disconnect
                 </Button>
@@ -112,14 +123,20 @@ function App() {
         </header>
 
         {note && (
-          <p className="border-b border-white/10 px-4 py-2 text-xs text-amber-300/80">{note}</p>
+          <p className="shrink-0 border-b border-border bg-destructive/10 px-4 py-2 text-[12px] text-destructive">
+            {note}
+          </p>
         )}
 
         <Chat address={address} events={events} onSay={say} onTerms={setTerms} />
       </main>
 
-      {/* Right — what is about to be signed, and which step of the flow we are at. */}
-      <aside className="hidden overflow-y-auto border-l border-white/10 xl:block">
+      {/* Right — what is about to be signed, and what the chain actually did. The card
+          surface, because it holds discrete facts rather than a stream. */}
+      <aside className={cn(
+        'hidden w-[380px] shrink-0 overflow-y-auto border-l border-border bg-card',
+        'xl:block',
+      )}>
         <SigningPane events={events} terms={terms} />
       </aside>
     </div>

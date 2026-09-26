@@ -11,9 +11,17 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "allowJs": true,
+    "checkJs": false,
+    "types": ["node"],
     "paths": {
       "@/*": ["./src/web/app/*"]
     }
   },
-  "include": ["src/web/app/**/*", "src/web/units.js"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.js"],
+  "exclude": [
+    "src/verify-*.js",
+    "src/demo-*.js",
+    "src/web/page.js",
+    "src/web/markup.js"
+  ]
 }
