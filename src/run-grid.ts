@@ -113,6 +113,17 @@ async function readState(guardId: string, bmId: string) {
   call('bounds', [tx.object(guardId)], [SUI_TYPE, USDC_TYPE]);
   call('budget', [tx.object(guardId)], [SUI_TYPE, USDC_TYPE]);
   call('committed', [tx.object(guardId)], [SUI_TYPE, USDC_TYPE]);
+  // What the account can actually SPEND. Every refusal from here on is about money rather than
+  // about the ladder, and a runner that reports only the ladder reports the wrong thing — the
+  // BalanceManager's balance is a dynamic field, so no plain object read can show it.
+  tx.moveCall({
+    target: '0x0e735f8c93a95722efd73521aca7a7652c0bb71ed1daf41b26dfd7d1ff71f748::balance_manager::balance',
+    typeArguments: [SUI_TYPE], arguments: [tx.object(bmId)],
+  });
+  tx.moveCall({
+    target: '0x0e735f8c93a95722efd73521aca7a7652c0bb71ed1daf41b26dfd7d1ff71f748::balance_manager::balance',
+    typeArguments: [USDC_TYPE], arguments: [tx.object(bmId)],
+  });
   tx.moveCall({
     target: `0x0e735f8c93a95722efd73521aca7a7652c0bb71ed1daf41b26dfd7d1ff71f748::pool::get_level2_ticks_from_mid`,
     typeArguments: [SUI_TYPE, USDC_TYPE],
@@ -135,7 +146,8 @@ async function readState(guardId: string, bmId: string) {
   const perCommand = (sim.commandResults ?? []).map((cr: any) =>
     (cr.returnValues ?? []).map((rv: any) => bytesOf(rv.bcs)),
   );
-  const [maker, agent, paused, bounds, budget, committed, book, openOrders] = perCommand;
+  const [maker, agent, paused, bounds, budget, committed, suiBalance, usdcBalance, book, openOrders] =
+    perCommand;
   const [bidPrices, , askPrices] = book;
   // `bounds` returns a TUPLE, and a tuple arrives as three separate return values rather than one
   // packed blob — the exact thing that made this reader throw on a subarray until the shape was
@@ -159,6 +171,7 @@ async function readState(guardId: string, bmId: string) {
       bestAsk: readVector(askPrices, 8)[0] ?? 0n,
       tick: DEEPBOOK_TICK_SIZE,
     },
+    account: { sui: readU64(suiBalance[0]), usdc: readU64(usdcBalance[0]) },
     open: readVector(openOrders[0], 16).map((orderId): OpenOrder => ({
       orderId,
       // A pass does not read each order's price, so every open order is treated as possibly
@@ -186,7 +199,7 @@ async function signerForSeat(agent: string) {
 }
 
 async function main() {
-  const { guard, book, open } = await readState(GUARD, BM);
+  const { guard, book, open, account } = await readState(GUARD, BM);
   const refs: OrderRefs = {
     guard: { objectId: GUARD, initialSharedVersion: await sharedVersionOf(client, GUARD), mutable: true },
     pool: { objectId: DEEPBOOK_POOL_ID, initialSharedVersion: await sharedVersionOf(client, DEEPBOOK_POOL_ID), mutable: true },
@@ -202,6 +215,7 @@ async function main() {
     console.log(JSON.stringify({
       mode: EXECUTE ? 'execute' : 'dry-run', step: 'run-grid', refused: plan.refused,
       guard: { paused: guard.paused, committed: guard.committed.toString(), budget: guard.budget.toString() },
+      funds: { sui: account.sui.toString(), usdc: account.usdc.toString() },
       book: { bestBid: book.bestBid.toString(), bestAsk: book.bestAsk.toString() },
     }, null, 2));
     return;
@@ -251,6 +265,7 @@ async function main() {
       refused: `the transaction would not execute: ${String((e as Error).message).slice(0, 240)}`,
       would: { cancel: plan.cancel.length, place: plan.place.length },
       account: { guard: GUARD, balanceManager: BM },
+      funds: { sui: account.sui.toString(), usdc: account.usdc.toString() },
       hint: 'an order is paid out of the BalanceManager, not the wallet — a ladder needs that side '
         + 'funded before it can rest',
     }, null, 2));

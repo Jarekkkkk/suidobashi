@@ -94,11 +94,19 @@ export function planGrid(opts: {
     return stoodDown(side, 'this runner does not hold the seat on this guard');
   }
 
-  // Never cross, in EITHER direction: a bid must sit below the best ask, and an ask above the best
-  // bid. Capping at the same side's own best price is what guarantees it, and it is the rule that
-  // keeps every level a maker order — no taker fee, and no fill at a price the grid did not choose.
-  const floor = side === 'bid' ? guard.priceMin : max(guard.priceMin, book.bestAsk);
-  const ceiling = side === 'bid' ? min(guard.priceMax, book.bestBid) : guard.priceMax;
+  // Never cross, in EITHER direction, and leave a TICK of margin while doing it. A bid must sit
+  // below the best ask and an ask above the best bid; capping at the same side's own best price is
+  // what guarantees that. The margin is because a level2 read and the placement are two different
+  // moments: the market moved between them on the first live ladder, and a POST_ONLY order that
+  // crosses ABORTS — `order_info::assert_execution`, code 5, EPOSTOrderCrossesOrderbook — rather
+  // than clamping. Move has no try/catch, so a runner that prices exactly at the touch dies on a
+  // tick. One tick of room costs a slightly worse fill and removes that failure entirely.
+  const floor = side === 'bid'
+    ? guard.priceMin
+    : max(guard.priceMin, book.bestAsk + book.tick);
+  const ceiling = side === 'bid'
+    ? min(guard.priceMax, book.bestBid)
+    : guard.priceMax;
   if (ceiling < floor) {
     return stoodDown(
       side,
