@@ -74,8 +74,8 @@ export function Chat({
   const say = onSay;
 
   /** The whole swap: propose, then the escrow, then hand it to the filler. */
-  async function send() {
-    const request = text.trim();
+  async function send(answer?: string) {
+    const request = (answer ?? text).trim();
     if (!request || busy) return;
     setBusy(true);
     setText('');
@@ -304,6 +304,32 @@ export function Chat({
                       {e.text}
                     </span>
                   </div>
+
+                  {/* A QUESTION, ANSWERED BY CLICKING. The options are the candidates the gate
+                      could not choose between — asking is a third outcome, not a refusal, and a
+                      dead end where the user needed a choice.
+
+                      The answer is the TEMPLATE plus the chosen name, not the original request:
+                      the original named two, and sending it back would ask the same question
+                      forever. */}
+                  {e.kind === 'asking' && Array.isArray(e.data?.options) && (
+                    <div className="mt-2 flex flex-wrap gap-1.5 pl-[64px]">
+                      {(e.data!.options as string[]).map((o) => (
+                        <button
+                          key={o}
+                          disabled={busy}
+                          onClick={() => void send(`use the ${o} agent to ${e.data!.template ?? ''}`)}
+                          className={cn(
+                            'rounded-md border border-brand/40 bg-brand-soft px-2.5 py-1',
+                            'text-[12px] text-brand transition-colors hover:bg-brand/20',
+                            'disabled:opacity-50',
+                          )}
+                        >
+                          {o}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               );
             })}

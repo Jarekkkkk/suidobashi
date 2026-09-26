@@ -1600,16 +1600,27 @@ const server = http.createServer((req, res) => {
         // model's part is advisory; the verdict is PIPELINE, because the gate is our
         // own code. Neither is CHAIN — nothing has touched the chain yet.
         const doc = firstJson(r.stdout);
+        // THREE OUTCOMES, not two. `proposed` allowed it, `refused` declined it, and `asking`
+        // could not decide because the request named more than one thing — which is a QUESTION,
+        // and rendering it as a refusal gave the user a dead end where they needed a choice.
+        const decision = doc?.decision;
+        const options = Array.isArray(doc?.options) ? doc.options : [];
+        // The request rebuilt from the parsed intent, with no hire name in it — so a client
+        // can answer by naming one without re-naming both.
+        const template = typeof doc?.template === 'string' ? doc.template : '';
         const events = [
           event('extracting', 'model', 'the local model is reading the request'),
-          doc && doc.decision === 'PROPOSED'
+          decision === 'PROPOSED'
             ? event('proposed', 'pipeline', 'the gate allowed it')
-            : event('refused', 'pipeline', ending('refused', {
-              reason: (doc && doc.validation && doc.validation.reason)
-                || (doc && doc.decision) || 'could not parse a proposal',
-            })),
+            : decision === 'ASKING'
+              ? event('asking', 'pipeline', 'the request names more than one — which one?',
+                  { options, template })
+              : event('refused', 'pipeline', ending('refused', {
+                reason: (doc && doc.validation && doc.validation.reason)
+                  || (doc && doc.decision) || 'could not parse a proposal',
+              })),
         ];
-        return send(200, JSON.stringify({ ...r, decision: doc?.decision, events }));
+        return send(200, JSON.stringify({ ...r, decision, options, template, events }));
       }
 
       // /api/build: returns bytes to sign, or a refusal with its reason.

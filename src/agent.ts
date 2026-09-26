@@ -439,9 +439,19 @@ async function main() {
   const policy = hire ? await policyState(hire) : null;
 
   let verdict;
-  if (!hirePick.ok) verdict = { ok: false, reason: hirePick.reason };
-  else if (!parsed.ok) verdict = { ok: false, reason: parsed.reason };
-  else verdict = validate(intent, amountMist ?? null, { walletSuiMist, text, hire, policy });
+  if (!hirePick.ok) {
+    // AMBIGUOUS, NOT REFUSED, and the distinction is the whole point of this branch.
+    //
+    // "the request names more than one hire — say which one" is a QUESTION, and it was being
+    // reported as a refusal: the same event kind, the same terminal wording, the same dead end.
+    // A user who names two things has not made a mistake; they have not finished, and the answer
+    // is to offer the choices rather than to tell them off.
+    verdict = { ok: false, reason: hirePick.reason, options: hirePick.named ?? [] };
+  } else if (!parsed.ok) {
+    verdict = { ok: false, reason: parsed.reason };
+  } else {
+    verdict = validate(intent, amountMist ?? null, { walletSuiMist, text, hire, policy });
+  }
 
   let decidedBy;
   if (hirePick.named.length === 1) decidedBy = `request text names "${hirePick.named[0]}"`;
@@ -479,8 +489,27 @@ async function main() {
   };
 
   if (!verdict.ok) {
-    console.log(JSON.stringify({ ...report, decision: 'REFUSED' }, null, 2));
-    process.exit(1);
+    // A choice to offer is a question; anything else is a refusal. The exit code says the same
+    // thing: ambiguity is not a failure, and a caller that treated it as one would have to
+    // unpick the difference from the text.
+    const options = (verdict as { options?: string[] }).options ?? [];
+    const asking = options.length > 1;
+
+    // THE TEMPLATE IS WHAT MAKES ANSWERING POSSIBLE, and it is not the original request.
+    //
+    // Re-sending the original text would name two hires again and ask the same question
+    // forever. This is the request REBUILT from the parsed intent, which by construction
+    // contains no hire name — so a client can answer by naming one, and the gate will find
+    // exactly one and proceed.
+    const template = intent.action === 'swap'
+      ? `swap ${intent.amountText} ${intent.from} to ${intent.to}`
+      : String(intent.action ?? '');
+    console.log(JSON.stringify({
+      ...report,
+      decision: asking ? 'ASKING' : 'REFUSED',
+      ...(asking ? { options, template } : {}),
+    }, null, 2));
+    process.exit(asking ? 0 : 1);
   }
 
     // The verdict above already refused a null hire, so this is the compiler needing to be told
