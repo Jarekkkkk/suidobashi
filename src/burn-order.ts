@@ -27,7 +27,7 @@
  * it. The key is checked against the order's maker before anything is signed.
  */
 import 'dotenv/config';
-import { PACKAGE_LATEST_ID, SUI_TYPE, DEPLOYER } from './addresses.js';
+import { PACKAGE_LATEST_ID, DEPLOYER, orderCoinType } from './addresses.js';
 import { buildWithSettledRetry } from './settled-retry.js';
 
 const EMIT_BYTES = process.argv.includes('--emit-bytes');
@@ -49,8 +49,23 @@ async function main() {
   // maker, not settled, or still holding funds — and each of those is much clearer
   // when the object's state is known before building.
   const obj = await client.getObject({ objectId: ORDER_ID, include: { json: true } });
-  const order = (obj.object ?? obj).json ?? {};
+  const o = obj.object ?? obj;
+  const order = o.json ?? {};
   if (!order.maker) throw new Error(`${ORDER_ID} does not look like an order`);
+
+  // WHICH COIN THE ORDER HOLDS, read from the object's own type.
+  //
+  // This was hardcoded to SUI, and an order escrowing USDC then failed the type check with
+  // `CommandArgumentError { arg_idx: 0, kind: TypeMismatch }` — the VM comparing `Order<USDC>`
+  // against the `Order<SUI>` the call declared. An order is generic and the type argument has to
+  // come from the object, not from the coin this project happens to think in.
+  //
+  // `orderCoinType` is the SAME reader the filler uses to decide which settle entry point to call,
+  // so the scripts and the server cannot disagree about what an order holds.
+  const coinType = orderCoinType(o.type);
+  if (!coinType) {
+    throw new Error(`${ORDER_ID} is not an Order<T> — its type is ${o.type ?? '(none)'}`);
+  }
 
   // --execute needs the key BEFORE the bytes are built, because the sender is part of what
   // gets signed: signing as one address while the transaction names another produces a
@@ -84,7 +99,7 @@ async function main() {
     tx.setSender(sender);
     tx.moveCall({
       target: `${PACKAGE_LATEST_ID}::order::burn`,
-      typeArguments: [SUI_TYPE],
+      typeArguments: [coinType],
       arguments: [tx.object(ORDER_ID)],
     });
     return tx.build({ client });
@@ -124,6 +139,7 @@ async function main() {
     step: 'burn a settled order',
     sender,
     order: ORDER_ID,
+    coin: coinType,
     maker: order.maker,
     holds: order.funds ?? null,
     ok,

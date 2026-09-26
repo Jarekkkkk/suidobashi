@@ -12,48 +12,83 @@
  * against an adversary.
  *
  * Usage:
- *   node src/create-order.js                 dry-run
+ *   node src/create-order.js                 dry-run, SUI -> USDC
  *   node src/create-order.js --emit-bytes    base64 bytes for the wallet to sign
+ *   ORDER_DIRECTION=USDC->SUI node src/create-order.js
  */
 import 'dotenv/config';
 import {
-  PACKAGE_LATEST_ID, POOL_ID, SUI_TYPE, CLOCK_ID, CLOCK_SHARED_VERSION, DEPLOYER,
+  PACKAGE_LATEST_ID, POOL_ID, CLOCK_ID, CLOCK_SHARED_VERSION, DEPLOYER,
   POLICY_ID, POLICY_SHARED_VERSION, VAULT_ID, VAULT_SHARED_VERSION,
+  DIRECTIONS, type Direction,
 } from './addresses.js';
+import { fromUnits } from './web/units.js';
 
 const EMIT_BYTES = process.argv.includes('--emit-bytes');
 
-/** What you are putting in. Small by default so a test is cheap. */
-const AMOUNT_MIST = BigInt(process.env.ORDER_AMOUNT_MIST ?? '10000000');   // 0.01 SUI
 /**
- * The least output you will accept, in USDC's 6 decimals. Set this to the worst
- * price you would still take — it is enforced by the same function that moves the
- * funds, so it cannot be undercut.
+ * WHICH WAY, and the only place this script learns anything direction-specific.
+ *
+ * The coin types, the decimals and the settle side all come from `DIRECTIONS` in addresses.ts, so
+ * a direction cannot be known here and unknown to the filler. Before that table existed this file
+ * carried `SUI_TYPE` in four places and "0.01 USDC" in two comments.
  */
-const MIN_OUT = BigInt(process.env.ORDER_MIN_OUT ?? '5000');               // 0.005 USDC
+const DIRECTION = String(process.env.ORDER_DIRECTION ?? 'SUI->USDC') as Direction;
+const DIR = DIRECTIONS[DIRECTION];
+if (!DIR) {
+  throw new Error(
+    `ORDER_DIRECTION must be one of ${Object.keys(DIRECTIONS).join(', ')}, not "${DIRECTION}"`,
+  );
+}
+
 /**
- * What you will pay whoever fills this, in USDC — the OUTPUT coin, so it comes out of
- * the proceeds rather than needing a second balance. Zero means no fee, and is stored
- * as absence.
+ * The legacy name, REFUSED rather than reinterpreted when the input is not SUI.
  *
- * `min_out` is what you RECEIVE, so the fee is on top of it rather than inside it: a
- * floor of 5 USDC means 5 USDC lands in your wallet and the fee is paid from above
- * that. Whoever fills the order collects, so no recipient is named.
- *
- * 0.01 USDC is a DEFAULT, not a price — the fee is declared per order, so this is what
- * you offer unless you change it. And it has to clear what a fill COSTS the filler,
- * which is measured rather than estimated:
- *
- *   a fill pays     0.01 USDC             = $0.0100
- *   a fill costs    gas 0.00557 SUI x ~$1.14 = $0.0064   (measured from a real fill)
- *   margin                                = $0.0036
- *
- * The first version of this comment used an ESTIMATED gas of 0.0043 SUI and set the
- * fee to 0.005, which read as break-even and was in fact a loss: 0.005 against a real
- * cost of 0.0064. A filler that loses money on every fill is a service that cannot
- * run, so the estimate being wrong mattered.
+ * `ORDER_AMOUNT_MIST` means MIST, and MIST only ever meant SUI. For a USDC input those digits are
+ * a thousandfold wrong, and silently reading them as USDC would escrow 0.00001 instead of 0.01 — a
+ * quiet unit error, in a script the user runs by hand. An old command should fail loudly.
  */
-const FEE_OUT = BigInt(process.env.ORDER_FEE_OUT ?? '10000');   // 0.01 USDC
+const LEGACY_AMOUNT = process.env.ORDER_AMOUNT_MIST;
+if (LEGACY_AMOUNT !== undefined && DIR.in.symbol !== 'SUI') {
+  throw new Error(
+    `ORDER_AMOUNT_MIST is in MIST and this direction escrows ${DIR.in.symbol} — the digits would be `
+    + `read a thousandfold wrong. Use ORDER_AMOUNT_IN (in ${DIR.in.symbol}'s smallest unit).`,
+  );
+}
+
+/** What you are putting in, in the INPUT coin's smallest unit. 0.01 of it, so a test is cheap. */
+const DEFAULT_AMOUNT_IN = 10n ** BigInt(DIR.in.decimals) / 100n;
+const AMOUNT_IN = BigInt(process.env.ORDER_AMOUNT_IN ?? LEGACY_AMOUNT ?? DEFAULT_AMOUNT_IN);
+/**
+ * The least output you will accept, and the fee you will pay for a fill.
+ *
+ * BOTH ARE IN THE OUTPUT COIN, which is a property of the contract rather than of the direction:
+ * the fee is paid out of the proceeds, so it is denominated in whatever the swap produces. For
+ * SUI -> USDC that is USDC; for USDC -> SUI it is SUI, and the filler is then paid in the same
+ * asset it spends on gas instead of having to sell the fee first.
+ *
+ * `min_out` is what you RECEIVE, so the fee sits ON TOP of it rather than inside: a floor of 5
+ * USDC means 5 USDC lands in your wallet and the fee is paid from above that.
+ *
+ * The defaults are 0.5% and 1% of ONE WHOLE OUTPUT COIN. Those are not new figures — they are the
+ * old flat USDC defaults (0.005 and 0.01), written so they stay the right size when the output is
+ * SUI. A flat 10000 would have meant 0.00001 SUI, which is a fee that pays for nothing.
+ */
+const DEFAULT_MIN_OUT = 50n * 10n ** BigInt(DIR.out.decimals) / 10_000n;   // 0.50%
+const MIN_OUT = BigInt(process.env.ORDER_MIN_OUT ?? DEFAULT_MIN_OUT);
+/**
+ * 1% of one whole output coin — 0.01 USDC, or 0.01 SUI. THE FILLER'S FLOOR, `MCP_MIN_FEE_OUT`.
+ *
+ * IT MUST STAY AN ABSOLUTE NUMBER. A fee below the filler's minimum is refused by the reference
+ * filler, so an order carrying one escrows money nobody takes — worse than not building it. Scaling
+ * this with the trade was tried and produced exactly that: 0.01 SUI orders with a 0.000012 USDC fee.
+ *
+ * The consequence is a MINIMUM TRADE SIZE, which is real rather than a bug: the output has to cover
+ * this plus something for the maker. The app derives that threshold from the live quote and says so
+ * in the refusal.
+ */
+const DEFAULT_FEE_OUT = 100n * 10n ** BigInt(DIR.out.decimals) / 10_000n;  // 1.00%
+const FEE_OUT = BigInt(process.env.ORDER_FEE_OUT ?? DEFAULT_FEE_OUT);
 /**
  * How long the order stays open, in milliseconds. After this, ANYONE may refund it —
  * and the funds always go to the maker.
@@ -88,7 +123,7 @@ async function main() {
 
   // A coin of exactly this much, resolved from the sender's coins and address
   // balance at build time. `create` takes a Coin, not a Balance.
-  const escrow = coinWithBalance({ type: SUI_TYPE, balance: AMOUNT_MIST });
+  const escrow = coinWithBalance({ type: DIR.in.type, balance: AMOUNT_IN });
 
   const clock = tx.sharedObjectRef({
     objectId: CLOCK_ID, initialSharedVersion: CLOCK_SHARED_VERSION, mutable: false,
@@ -113,7 +148,9 @@ async function main() {
   // identically to `create` and there is one path to maintain.
   tx.moveCall({
     target: `${PACKAGE_LATEST_ID}::order::create_with_policy`,
-    typeArguments: [SUI_TYPE],
+    // The INPUT coin, and the only thing that decides which side of the pool this order sits on.
+    // Whoever fills it reads this back off the object's type and picks `settle_a2b` or `settle_b2a`.
+    typeArguments: [DIR.in.type],
     arguments: [
       tx.sharedObjectRef({
         objectId: POLICY_ID,
@@ -148,10 +185,14 @@ async function main() {
   console.log(JSON.stringify({
     mode: 'dry-run',
     step: 'escrow a swap order',
+    direction: DIRECTION,
     sender,
-    escrowSui: (Number(AMOUNT_MIST) / 1e9).toString(),
-    minOutUsdc: (Number(MIN_OUT) / 1e6).toString(),
-    feeOutUsdc: (Number(FEE_OUT) / 1e6).toString(),
+    escrow: fromUnits(AMOUNT_IN, DIR.in.decimals),
+    escrowSymbol: DIR.in.symbol,
+    minOut: fromUnits(MIN_OUT, DIR.out.decimals),
+    minOutSymbol: DIR.out.symbol,
+    feeOut: fromUnits(FEE_OUT, DIR.out.decimals),
+    feeOutSymbol: DIR.out.symbol,
     ttlSeconds: Number(TTL_MS / 1000n),
     pool: POOL,
     destination: DESTINATION,

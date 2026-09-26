@@ -31,7 +31,7 @@ export const EVENT_KINDS: EventKind[] = [
   'extracting',          // the local model is running
   'proposed',            // the deterministic gate allowed it
   'asking',              // the gate could not decide, and lists the candidates
-  'answered',            // the app answered it directly; the model was not asked
+  'answered',            // the app answered it directly, rather than proposing something to sign
   'refused',             // the gate declined it, with a reason
   'building',            // constructing the transaction
   'awaiting-signature',  // the wallet has been asked
@@ -91,6 +91,9 @@ const ENDING: Record<string, (d: EndingDetail) => string> = {
   revoked: () => 'revoked — your escrow is back in your wallet',
   refused: (d) => `refused — ${d.reason}`,
   // An ANSWER is not an outcome — it IS the response, and the server sends its text directly.
+  // Two things arrive this way: a question about what is installed, which the model is never asked,
+  // and a READ, whose numbers come back from the chain. Both END the flow, which is why `answered`
+  // is terminal.
   // This exists so the vocabulary stays consistent: every terminal kind has wording, and the
   // check that enforces it is worth more than an exception carved out for one kind. `answered`
   // being missing from TERMINAL_KINDS is what caused the fold to hide every capabilities answer,

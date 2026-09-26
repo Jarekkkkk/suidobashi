@@ -18,7 +18,7 @@ module sui_tokyo::order;
 use cetus_clmm::config::GlobalConfig;
 use cetus_clmm::pool::Pool;
 use sui_tokyo::policy::{Self, Policy};
-use sui_tokyo::spend_vault::{Self, Vault};
+use sui_tokyo::spend_vault::{Self, OwnerCap, Vault};
 use sui::balance::{Self, Balance};
 use sui::clock::Clock;
 use sui::coin::{Self, Coin};
@@ -51,6 +51,10 @@ const ENotSettled: vector<u8> = "order has not been settled";
 const ENotMaker: vector<u8> = "only the maker may reclaim this order's storage";
 #[error]
 const EFeeAboveOutput: vector<u8> = "the fee is larger than the output";
+#[error]
+const ENotVaultFunded: vector<u8> = "that order is not a vault-funded commitment";
+#[error]
+const ENotOwner: vector<u8> = "only the vault's owner may commit its funds";
 
 /// Dynamic-field key holding the fee a maker will pay for a fill, in the OUTPUT
 /// coin's units.
@@ -66,6 +70,14 @@ public struct FeeKey has copy, drop, store {}
 /// existing struct's layout. The same constraint that put the slippage bound in a
 /// dynamic field applies here.
 public struct SettledKey has copy, drop, store {}
+
+/// Dynamic-field key holding the amount a VAULT-FUNDED commitment will draw at settlement.
+///
+/// An order built by `create_from_vault` holds no funds at all — the money stays in the vault until
+/// someone settles — so the amount has to live somewhere, and `Order` is published and its layout is
+/// frozen. The PRESENCE of this key is what distinguishes a commitment from a wallet-funded order,
+/// which escrows its own coin and needs no number here.
+public struct CommitKey has copy, drop, store {}
 
 /// A maker's swap commitment: funds escrowed, minimum committed, expiring.
 ///
@@ -129,6 +141,21 @@ public struct OrderBurned has copy, drop {
     order_id: ID,
     maker: address,
     burned_by: address,
+}
+
+/// A commitment against the vault was created.
+///
+/// NOT `OrderCreated`, deliberately: that event says nothing about where the funds are, and reusing
+/// it would let an indexer count a commitment as an escrow — the kind of quiet disagreement between
+/// a name and a fact that this project has paid for more than once.
+public struct OrderCommitted has copy, drop {
+    order_id: ID,
+    maker: address,
+    destination: address,
+    pool_id: ID,
+    amount_in: u64,
+    min_out: u64,
+    expires_at_ms: u64,
 }
 
 // === Maker side ===
@@ -198,7 +225,8 @@ public fun create_with_fee<CoinType>(
 /// takes `&mut Vault` and the `SpenderCap` embedded in the policy, and which returns a balance
 /// FROM THE VAULT — a different pot from the wallet this escrow comes out of. Making the budget
 /// bound TOTAL spend means moving the escrow into the vault, which is a change to where the
-/// funds live rather than a check added here.
+/// funds live rather than a check added here. **`create_from_vault` IS that change**, and it draws
+/// at SETTLEMENT rather than at creation — its own note says why, and what that gives up.
 ///
 /// A new function rather than a parameter on `create_with_fee`, because a compatible upgrade
 /// cannot change an existing public function's signature. Both route through `build`, so their
@@ -225,6 +253,89 @@ let (mut order, order_id) = build(coin, pool_id, min_out, expires_at_ms, destina
 if (fee_out > 0) dynamic_field::add(&mut order.id, FeeKey {}, fee_out);
 transfer::share_object(order);
 order_id
+}
+
+/// Commit the VAULT's funds to a trade without moving them yet. Settlement draws, and decrements.
+///
+/// THE ESCROW IS THE VAULT. The maker commits an amount, a floor and an expiry; the money stays where
+/// it is until someone settles, and settlement is what `spend_vault::spend`s it out. That is the
+/// difference from `create_with_policy`, which escrows the maker's own coin and only READS the
+/// allowance — a ceiling per order, not a spending total.
+///
+/// ### Why this does not draw at creation
+///
+/// `spend_vault` has no credit-back: `set_allowance` is owner-gated and `spend` only debits. An order
+/// that drew at creation and then expired could never return the budget it took, and with a
+/// one-minute window expiry is the COMMON case rather than the edge. Drawing at settlement means an
+/// expired commitment costs nothing but the storage of an empty object.
+///
+/// ### What that gives up, stated plainly
+///
+/// The ceiling is NOT reserved. The allowance is checked here as a courtesy and checked AGAIN for real
+/// by `spend` at settlement — so a maker who commits more than the remaining budget gets the first
+/// settlement and not the second. A reservation needs the credit-back that does not exist.
+///
+/// ### No destination parameter
+///
+/// Value will leave the vault, so the destination is the POLICY's and not the caller's. With a
+/// caller-supplied destination, anyone could commit the owner's money to any address — the same hole
+/// the vault path closes by never accepting one.
+///
+/// ### The owner signs, and the OwnerCap is why
+///
+/// This is the owner's money being committed, so the owner presents their `OwnerCap` and the cap is
+/// checked against THIS vault. Without that gate any address could commit the owner's funds: every
+/// settlement would still deliver to the policy's destination, so nothing could be STOLEN — but the
+/// budget would be burned on trades the owner never asked for, which is a griefing vector rather
+/// than a safe default. `Policy` carries no owner field, and this is the credential that exists.
+public fun create_from_vault<CoinType>(
+    policy: &Policy,
+    vault: &Vault,
+    owner_cap: &OwnerCap,
+    amount_in: u64,
+    pool_id: ID,
+    min_out: u64,
+    fee_out: u64,
+    expires_at_ms: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+): ID {
+    // The owner's credential for THIS vault, the same binding `policy::create` checks.
+    assert!(
+        spend_vault::owner_cap_vault_id(owner_cap) == policy::vault_id(policy),
+        ENotOwner,
+    );
+
+    // The same courtesy check the wallet path makes, so a commitment the grant cannot cover is
+    // refused while the maker is still looking at it rather than at settlement time.
+    let remaining = spend_vault::allowance<CoinType>(vault, policy::cap_id(policy));
+    assert!(remaining >= amount_in, EExceedsAllowance);
+
+    assert!(amount_in > 0, EZeroAmount);
+    assert!(min_out > 0, EZeroMinOut);
+    assert!(expires_at_ms > clock.timestamp_ms(), EOrderExpired);
+
+    let maker = ctx.sender();
+    let destination = policy::destination(policy);
+    let mut order = Order<CoinType> {
+        id: object::new(ctx),
+        maker,
+        destination,
+        // EMPTY, and that is the design: the funds stay in the vault.
+        funds: balance::zero<CoinType>(),
+        pool_id,
+        min_out,
+        expires_at_ms,
+    };
+    let order_id = object::id(&order);
+    if (fee_out > 0) dynamic_field::add(&mut order.id, FeeKey {}, fee_out);
+    // What settlement must draw. Its presence is also what marks this a commitment.
+    dynamic_field::add(&mut order.id, CommitKey {}, amount_in);
+    event::emit(OrderCommitted {
+        order_id, maker, destination, pool_id, amount_in, min_out, expires_at_ms,
+    });
+    transfer::share_object(order);
+    order_id
 }
 
 /// Validate and construct an order. Shared by both entry points, so their validation
@@ -392,7 +503,66 @@ public fun settle_b2a<A, B>(
     });
 }
 
+/// Settle a VAULT-FUNDED commitment, drawing the funds at this moment.
+///
+/// The draw and the settlement are ONE transaction, and the draw is what decrements the ledger. What
+/// follows is the same `settle_a2b` a wallet order uses — same gates, same floor assertion, same
+/// delivery, same marker — because the only difference between the two kinds of order is where the
+/// money was before this call.
+public fun settle_from_vault_a2b<A, B>(
+    policy: &Policy,
+    vault: &mut Vault,
+    mut order: Order<A>,
+    config: &GlobalConfig,
+    pool: &mut Pool<A, B>,
+    sqrt_price_limit: u128,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    // CHECKED BEFORE THE DRAW. `settle_a2b` checks this too, as a backstop — but funding first would
+    // mean a second settlement drew from the vault and then reverted, which is harmless and reads
+    // like a fill that nearly happened.
+    assert!(!is_settled(&order), EAlreadySettled);
+    fund_from_vault<A>(policy, vault, &mut order, clock, ctx);
+    settle_a2b(policy, order, config, pool, sqrt_price_limit, clock, ctx);
+}
+
+/// B-side twin of `settle_from_vault_a2b`. Same reasoning, same one-line body.
+public fun settle_from_vault_b2a<A, B>(
+    policy: &Policy,
+    vault: &mut Vault,
+    mut order: Order<B>,
+    config: &GlobalConfig,
+    pool: &mut Pool<A, B>,
+    sqrt_price_limit: u128,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    assert!(!is_settled(&order), EAlreadySettled);
+    fund_from_vault<B>(policy, vault, &mut order, clock, ctx);
+    settle_b2a(policy, order, config, pool, sqrt_price_limit, clock, ctx);
+}
+
 // === Internals ===
+
+/// Draw this commitment's amount from the vault and put it INSIDE the order, so that the settlement
+/// which follows is the same code as the wallet-funded one.
+///
+/// `join` rather than assignment: the order's balance is empty by construction, and `join` is how a
+/// balance goes in. The amount comes from the dynamic field, so it is the number the MAKER
+/// committed to and never one the settler supplied.
+fun fund_from_vault<CoinType>(
+    policy: &Policy,
+    vault: &mut Vault,
+    order: &mut Order<CoinType>,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    assert!(from_vault(order), ENotVaultFunded);
+    let amount = committed_amount(order);
+    let drawn = policy::spend_balance_from_vault<CoinType>(policy, vault, amount, clock, ctx);
+    order.funds.join(drawn);
+}
 
 /// The gates a settlement must pass, in order. Kept in one place so both directions
 /// cannot drift apart.
@@ -526,3 +696,19 @@ public fun settled<CoinType>(order: &Order<CoinType>): bool { is_settled(order) 
 /// What this order pays whoever fills it, in the output coin's units. Zero when no
 /// fee was declared.
 public fun fee<CoinType>(order: &Order<CoinType>): u64 { fee_out(order) }
+
+/// Whether this order draws from the VAULT at settlement instead of holding its own funds.
+public fun from_vault<CoinType>(order: &Order<CoinType>): bool {
+    dynamic_field::exists(&order.id, CommitKey {})
+}
+
+/// The amount a vault-funded commitment will draw. ZERO for a wallet-funded order, which already
+/// holds its funds — so a caller reading this must pair it with `from_vault` rather than treating a
+/// zero as a commitment of nothing.
+public fun committed_amount<CoinType>(order: &Order<CoinType>): u64 {
+    if (dynamic_field::exists(&order.id, CommitKey {})) {
+        *dynamic_field::borrow<CommitKey, u64>(&order.id, CommitKey {})
+    } else {
+        0
+    }
+}

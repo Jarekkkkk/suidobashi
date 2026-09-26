@@ -111,6 +111,97 @@ export const USDC_TYPE =
   '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC';
 
 /**
+ * The pool's own type arguments, A then B. `Pool<USDC, SUI>` fixes them for every call, so a
+ * settle names [USDC, SUI] in BOTH directions — the direction decides which ENTRY POINT and which
+ * side the order holds, never the type arguments. Writing them out per direction is how a
+ * `settle_a2b` ends up called with its arguments reversed, which compiles and swaps the wrong way.
+ */
+export const POOL_TYPE_ARGS = [USDC_TYPE, SUI_TYPE] as const;
+
+/**
+ * THE TWO DIRECTIONS THE ESCROW CAN SETTLE, in one table.
+ *
+ * `Pool<USDC, SUI>` fixes A = USDC and B = SUI, so an order escrowing USDC holds side A and can
+ * only go A->B, and one escrowing SUI holds side B and can only go B->A. Move is statically typed
+ * and cannot infer which it is, which is why the module has two settle entry points — and why the
+ * direction has to be carried explicitly on this side instead of being worked out.
+ *
+ * It lives HERE because the alternative is five files each knowing a pair of decimals and spelling
+ * "USDC" into a message, which is exactly how a unit error gets in. `settle` is here for the same
+ * reason: which entry point fills an order is a property of the direction, not of the filler.
+ *
+ * The FEE IS ALWAYS IN THE OUTPUT COIN — that is a property of the contract, not of a direction —
+ * so it is not a field here. It is worth stating because it means the two directions pay a filler
+ * in different assets: USDC for a SUI order, SUI for a USDC one.
+ */
+export type Direction = 'SUI->USDC' | 'USDC->SUI';
+
+export type CoinSpec = { type: string; symbol: string; decimals: number };
+
+/**
+ * The coins this system can denominate anything in, BY SYMBOL.
+ *
+ * One entry per coin, and `DIRECTIONS` below is built from these rather than repeating the type and
+ * the decimals — because USDC's decimals were written out in four separate places at one point, and
+ * that is exactly what produced a thousandfold error in the amount parser. Anything that needs "USDC"
+ * as a COIN rather than as one end of a trade reads it here.
+ */
+export const COINS: Record<string, CoinSpec> = {
+  SUI: { type: SUI_TYPE, symbol: 'SUI', decimals: 9 },
+  USDC: { type: USDC_TYPE, symbol: 'USDC', decimals: 6 },
+};
+
+export const DIRECTIONS: Record<Direction, {
+  in: CoinSpec; out: CoinSpec; settle: 'settle_a2b' | 'settle_b2a';
+  /**
+   * WHICH SIDE OF THE POOL PRICE THE SWAP HEADS, as a sign on the slippage allowance.
+   *
+   * A PRICE LIMIT HAS TO SIT ON THE SIDE THE SWAP IS GOING, or the pool refuses the very first step:
+   * `flash_swap_internal` aborts before any swap happens. Selling coin A pushes the pool price DOWN
+   * (`a2b`), so its limit belongs below; selling B pushes it up (`b2a`), so its limit belongs above.
+   *
+   * This was hardcoded to `10_000 + slippage` in the filler and in `settle-order.ts` — correct for
+   * `b2a`, the direction both were written for, and the reason EVERY `USDC -> SUI` order aborted in
+   * the pool and expired unfilled. `assert_within_bps` could not catch it: it compares magnitudes and
+   * is deliberately symmetric about the side.
+   */
+  limitSign: 1 | -1;
+}> = {
+  'SUI->USDC': { in: COINS.SUI, out: COINS.USDC, settle: 'settle_b2a', limitSign: 1 },
+  'USDC->SUI': { in: COINS.USDC, out: COINS.SUI, settle: 'settle_a2b', limitSign: -1 },
+};
+
+/**
+ * Compare coin types on their trailing segments only.
+ *
+ * The aggregator returns SUI as `0x000…002::sui::SUI` while our constants use the short form, and
+ * `normalizeCoinType` does not bridge that — so a naive equality test silently never matches. This
+ * is the one comparison, used by the table below and by the advisor.
+ */
+export const shortCoinType = (t: unknown): string => String(t ?? '').split('::').slice(-2).join('::');
+
+/** The direction whose INPUT is this coin type, or null. How a direction is read back off chain. */
+export function directionForCoinType(type: string): Direction | null {
+  const short = shortCoinType(type);
+  for (const [name, d] of Object.entries(DIRECTIONS)) {
+    if (shortCoinType(d.in.type) === short) return name as Direction;
+  }
+  return null;
+}
+
+/**
+ * The coin an `Order<CoinType>` object escrows, read from the object's own type string.
+ *
+ * NOT from its `json`: `funds` is a `Balance<CoinType>` and its field is just a number, so the
+ * type argument on the object type is the only place the coin appears. That is the difference
+ * between a filler that knows which side of the pool it is settling and one that has to be told
+ * by whoever asked.
+ */
+export function orderCoinType(objectType: unknown): string | null {
+  return /::order::Order<(.+)>$/.exec(String(objectType ?? ''))?.[1] ?? null;
+}
+
+/**
  * Cetus CLMM SUI/USDC pool recommended by the aggregator advisor.
  * Object type is `Pool<USDC, SUI>` — so A=USDC, B=SUI, and a SUI→USDC swap is
  * `a2b = false`. Fee 0.05%.

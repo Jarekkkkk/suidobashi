@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
-import { suiToMist } from '../../units';
+import { suiToMist, usdcToUnits } from '../../units';
 
 /**
  * The whole policy, in one place, saved in one transaction.
@@ -23,6 +23,8 @@ export type PolicyHire = {
   name: string;
   policyId: string;
   budgetSui?: string;
+  /** The USDC row of the same ledger. A different ceiling, not a conversion of the SUI one. */
+  budgetUsdc?: string | null;
   agent?: string;
   suspended?: boolean;
   venueIds?: string[];
@@ -48,12 +50,18 @@ export function PolicySheet({
   const original = {
     agent: hire.agent ?? '',
     budgetSui: hire.budgetSui ?? '',
+    budgetUsdc: hire.budgetUsdc ?? '',
     suspended: Boolean(hire.suspended),
     venues: (hire.venueIds ?? []).map((v) => v.toLowerCase()),
   };
 
   const [agent, setAgent] = useState(original.agent);
-  const [budgetSui, setBudgetSui] = useState(original.budgetSui);
+  const [budgetValue, setBudgetValue] = useState(original.budgetSui);
+  // WHICH ROW of the OZ ledger the budget field is about. `set_allowance` is keyed by
+  // (cap_id, coin_type), so SUI and USDC are different ceilings — and only the SUI row is READ here,
+  // which is why switching to USDC CLEARS the field rather than showing the SUI figure: a number
+  // that belongs to another coin is a plausible lie.
+  const [budgetCoin, setBudgetCoin] = useState<'SUI' | 'USDC'>('SUI');
   const [suspended, setSuspended] = useState(original.suspended);
   const [venues, setVenues] = useState<string[]>(original.venues);
   const [draft, setDraft] = useState('');
@@ -68,7 +76,11 @@ export function PolicySheet({
 
   const allow = venues.filter((v) => !original.venues.includes(v));
   const revoke = original.venues.filter((v) => !venues.includes(v));
-  const budgetChanged = budgetSui.trim() !== original.budgetSui.trim();
+  // THE BASELINE IS THE COIN'S OWN ROW. Comparing a USDC entry against the SUI figure would be a
+  // diff across two different ledgers — and an unread row is why the sheet looked like it had not
+  // updated after a USDC grant landed.
+  const baseline = budgetCoin === 'SUI' ? original.budgetSui : original.budgetUsdc;
+  const budgetChanged = budgetValue.trim() !== baseline.trim();
   const agentChanged = agent.trim().toLowerCase() !== original.agent.toLowerCase();
   const suspendedChanged = suspended !== original.suspended;
   const changed = allow.length + revoke.length + Number(budgetChanged) + Number(agentChanged) + Number(suspendedChanged);
@@ -83,9 +95,18 @@ export function PolicySheet({
     // price bound — even for one instruction — is the case the bound exists for.
     if (agentChanged) body.boundBps = '5';
     if (budgetChanged) {
-      const mist = suiToMist(budgetSui.trim());
-      if (mist === null) return setErr(`"${budgetSui.trim()}" is not a plain decimal with at most 9 places`);
+      // Parsed with the SELECTED coin's decimals: 9 places for SUI, 6 for USDC. A parser that does
+      // not know which coin it is holding happily converts a USDC amount with SUI's decimals, which
+      // is the thousandfold error this project has already paid for once.
+      const decimals = budgetCoin === 'SUI' ? 9 : 6;
+      const mist = budgetCoin === 'SUI'
+        ? suiToMist(budgetValue.trim())
+        : usdcToUnits(budgetValue.trim());
+      if (mist === null) {
+        return setErr(`"${budgetValue.trim()}" is not a plain decimal with at most ${decimals} places`);
+      }
       body.budgetMist = mist;
+      body.budgetCoin = budgetCoin;
     }
     if (suspendedChanged) body.suspended = suspended;
     if (allow.length) body.allowPools = allow;
@@ -144,16 +165,33 @@ export function PolicySheet({
 
           <Field
             label="budget"
-            hint="read from the OpenZeppelin ledger, and it is what is LEFT, not what was granted — the contract stores only the remaining figure, so the original grant is not recoverable. typing a new number sets it and resets the spent counter. BOUNDS ONE ORDER: an order larger than this is refused before it is created. it is NOT a spending total — the allowance is not decremented, so several orders of this size each pass a grant that covers one."
+            hint={budgetCoin === 'SUI'
+              ? 'read from the OpenZeppelin ledger, and it is what is LEFT, not what was granted — the contract stores only the remaining figure, so the original grant is not recoverable. typing a new number sets it and resets the spent counter. BOUNDS ONE ORDER: an order larger than this is refused before it is created. it is NOT a spending total — the allowance is not decremented, so several orders of this size each pass a grant that covers one.'
+              : `the ${budgetCoin} ceiling, and a THIRD row of the same ledger — a SUI grant does not cover a USDC order, so the agent's refusal names this figure, not the SUI one. read from the ledger like the SUI row, and what is LEFT after any spend.`}
           >
             <div className="flex items-center gap-2">
+              {/* Which row of the ledger. Two values, so a pair of buttons rather than a select. */}
+              <div className="flex shrink-0 rounded-md border border-input">
+                {(['SUI', 'USDC'] as const).map((c) => (
+                  <button
+                    key={c}
+                    className={cn(
+                      'px-2 py-1 text-[11px] transition-colors',
+                      budgetCoin === c ? 'bg-accent text-accent-foreground' : 'text-muted-foreground',
+                    )}
+                    onClick={() => { setBudgetCoin(c); setBudgetValue(c === 'SUI' ? original.budgetSui : original.budgetUsdc); }}
+                  >
+                    {c}
+                  </button>
+                ))}
+              </div>
               <input
                 className={cn(inputCls, 'flex-1')}
-                value={budgetSui}
-                placeholder="0.03"
-                onChange={(e) => setBudgetSui(e.target.value)}
+                value={budgetValue}
+                placeholder={budgetCoin === 'SUI' ? '0.03' : '1'}
+                onChange={(e) => setBudgetValue(e.target.value)}
               />
-              <span className="text-[11px] text-muted-foreground">SUI</span>
+              <span className="text-[11px] text-muted-foreground">{budgetCoin}</span>
             </div>
           </Field>
 
@@ -208,7 +246,7 @@ export function PolicySheet({
             <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">will send</div>
             <ul className="mt-1 flex flex-col gap-0.5 font-mono text-[11px] text-muted-foreground">
               {agentChanged && <li>· set agent {short(agent.trim())} (bound 5 bps)</li>}
-              {budgetChanged && <li>· set budget {budgetSui.trim()} SUI</li>}
+              {budgetChanged && <li>· set budget {budgetValue.trim()} {budgetCoin}</li>}
               {allow.map((v) => <li key={v}>· allow {short(v)}</li>)}
               {revoke.map((v) => <li key={v}>· revoke {short(v)}</li>)}
               {suspendedChanged && <li>· {suspended ? 'suspend' : 'resume'}</li>}

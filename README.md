@@ -42,20 +42,25 @@ move/sources/
   spend_vault.move       OpenZeppelin's allowance ledger, vendored by inlining
 
 src/
-  addresses.js           every deployed id — the single source of truth
-  hires.js               which policy, cap and venue a strategy uses (bookkeeping only)
-  agent.js               the intent layer: extract, ground, gate
-  ui.js                  the local server: page, gate, build/submit split
-  swap.js, rebalance.js, redeem.js, position lifecycle scripts
-  verify-intent.js       checks for the intent layer (8 cases)
-  verify-page.js         checks for escaping and amount parsing
+  addresses.ts           every deployed id — the single source of truth
+  hires.ts               which policy, cap and venue a strategy uses (bookkeeping only)
+  agent.ts               the intent layer: extract, ground, gate
+  ui.ts                  the local server: serves the app, the gate, build/submit split
+  swap.ts, rebalance.ts, redeem.ts, position lifecycle scripts
+  verify-intent.js       checks for the intent layer
+  verify-page.js         checks for amount parsing, the event vocabulary, source relations
   verify-guard.js        checks for guard adoption, against a real transaction
 
 src/web/
-  page.js                the page's logic (a real module — see DECISIONS.md)
-  markup.js              escaping; safe markup is a String subclass
-  units.js               decimal → integer money, exact, no floats
+  app/                   the React app served at /app — the only UI since `/` was deleted
+  units.ts               decimal → integer money, exact, no floats
+  events.ts              the event vocabulary the app and the server share
 ```
+
+The old page (`src/web/page.js`, `src/web/markup.js`) was **deleted**: the app
+at `/app` replaced it. Its capabilities that the app has no control for yet —
+`topup`, `withdraw`, and the position lifecycle — remain reachable through the
+`--emit-bytes` scripts, and `HANDOFF.md` records which they are.
 
 Verified limits live in `src/addresses.js` and on chain. `src/hires.js` is
 **bookkeeping only** — the chain holds the authority, so a wrong entry produces a

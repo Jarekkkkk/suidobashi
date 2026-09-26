@@ -223,6 +223,17 @@ Three rules that survive:
    ~0.00557 SUI (~$0.0064) against a 0.01 USDC fee. A floor below cost is worse than no
    floor — it looks like a policy and behaves like a subsidy.
 3. **A paid fee is not a permission.** Paying does not widen the grant.
+4. **Do not advertise a price you cannot be paid.** The manifest is what a client reads
+   before it asks, so a price in it is a promise. See below.
+
+**The reference implementation, and the rule it adds.** `src/query-server.ts` is the first server
+on a non-fill route: read-only, holds no key, and has **no fill route at all**, which makes "never
+charges for a fill" true by construction rather than by care. It accepts a declared price and
+answers `402` with those terms when one is set — and it ships OFF, because paying means building a
+transaction that draws from the vault under a grant, and no client can do that yet. So the default
+price is zero and the manifest says so. See rule 4: the cheap version of this feature is a manifest
+promising a price, and it would repeat this project's oldest trap — a described and unimplemented
+capability reads as available.
 
 ## Lifecycle
 
@@ -230,6 +241,8 @@ Three rules that survive:
 ① DISCOVER   browse / search the marketplace
 ② INSTALL    see packages · functions · prompt · fee        ← the consent moment
              choose a budget → set_allowance + set_pool_allowed on chain
+             (a talent that does NOT spend skips the grant entirely — there is nothing
+              on chain to set, and the gate knows which it is from the talent)
 ③ ASK        route over INSTALLED verbs (deterministic)
 ④ CONFIGURE  user supplies the declared variables
 ⑤ CREATE     the maker escrows an order on chain, declaring min_out and a fee

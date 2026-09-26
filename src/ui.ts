@@ -24,16 +24,16 @@ import { spawnSync } from 'node:child_process';
 // One reader of the allowance ledger. It lives in agent.ts because the GATE needs it too —
 // checking it only on chain means the refusal arrives as a MoveAbort with no numbers in it.
 import { allowanceMist } from './agent.js';
-import { VAULT_ID, DEPLOYER, USDC_TYPE, REWARD_TYPE, PACKAGE_LATEST_ID, POOL_TICK_SPACING, GUARD_ID, GUARD_SHARED_VERSION, SLIPPAGE_BPS } from './addresses.js';
+import { VAULT_ID, DEPLOYER, USDC_TYPE, REWARD_TYPE, PACKAGE_LATEST_ID, POOL_TICK_SPACING, GUARD_ID, GUARD_SHARED_VERSION, SLIPPAGE_BPS, COINS, DIRECTIONS, type Direction } from './addresses.js';
 import { HIRES } from './hires.js';
-import { MARKETPLACE, describeTalents, talentFor } from './talents.js';
+import { MARKETPLACE, describeTalents, serverForAction, talentFor } from './talents.js';
 import { findCreatedGuard, repointAddresses } from './guard-id.js';
 import { event, endingFor, type EventKind } from './web/events.js';
 import {
   listChats, createChat, getChat, renameChat, deleteChat, messages, append,
   listTalents, installTalent, uninstallTalent, dbPath,
 } from './db.js';
-import { unitsToUsdc } from './web/units.js';
+import { fromUnits } from './web/units.js';
 
 const PORT = Number(process.env.UI_PORT ?? 8788);
 const HOST = process.env.UI_HOST ?? '127.0.0.1';
@@ -131,7 +131,7 @@ const APP_PAGE = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>sui-tokyo</title>
+<title>suidobashi</title>
 <link rel="stylesheet" href="/app.css">
 </head>
 <body data-token="__TOKEN__">
@@ -220,6 +220,13 @@ async function hires() {
      * what was set, which is the honest reading — and `set_allowance` resets it.
      */
     budgetMist?: string | null;
+    /**
+     * The USDC ceiling, read from the same ledger as a DIFFERENT ROW — `set_allowance` is keyed by
+     * (cap_id, coin_type), so the SUI figure never answers "what is the USDC ceiling". Read because
+     * the sheet OFFERS a USDC field: a panel that can set a value it cannot read back leaves the
+     * owner unable to see the grant they just signed, which is exactly how this was noticed.
+     */
+    budgetUsdc?: string | null;
     /** The registry's figure: the ORIGINAL grant, which drifts the moment anyone changes the
      *  budget. Kept only so the UI can say where a number came from when the read fails. */
     budgetLocalSui: string;
@@ -260,6 +267,10 @@ async function hires() {
       const mist = await allowanceMist(h.capId);
       row.budgetMist = mist === null ? null : mist.toString();
       if (mist !== null) row.budgetSui = (Number(mist) / 1e9).toString();
+      // The USDC row, so the USDC field in the sheet has a baseline to diff against. `fromUnits`
+      // rather than a division: the project has one formatter for money and it is exact.
+      const usdcMist = await allowanceMist(h.capId, USDC_TYPE);
+      row.budgetUsdc = usdcMist === null ? null : fromUnits(BigInt(usdcMist), 6);
       // Whether this hire's OWN venue is open, read from the chain. A count alone
       // hides the difference between two hires on two different pools.
       row.ownVenueOpen = list.includes(String(h.venue.id).toLowerCase());
@@ -346,22 +357,24 @@ function firstJson(stdout: string): any {
  * Returns null when the fee leaves no room — that is a real answer, not a failure to quote.
  */
 /**
- * The floor for an escrowed order, from a live quote.
+ * The OUTPUT a live quote expects, in the output coin's smallest unit — or null.
  *
- * @param {bigint} amountMist
- * @param {bigint} feeOut
- * @returns {bigint | null}
+ * RETURNS THE QUOTE, NOT A FLOOR, and that split is the fix for a knife edge. This function used to
+ * take the fee and return `quote - slippage - fee`, which made the DEFAULT FEE part of the
+ * arithmetic that decides whether an order can be built at all. On a 0.01 SUI trade the flat 0.01
+ * USDC default was 84% of the output, so building the order came down to whether the SUI price had
+ * drifted ~16% since the default was written. A flat fee is not a bound, it is a coincidence.
+ *
+ * The floor is derived by the CALLER, which is the only place that knows the fee.
  */
-function quoteMinOut(amountMist: bigint, feeOut: bigint): bigint | null {
-  const r = spawnSync(RUNTIME, ['src/advisor.js', String(amountMist)], {
+function quoteOut(amountIn: bigint, direction: Direction): bigint | null {
+  const r = spawnSync(RUNTIME, ['src/advisor.js', String(amountIn), direction], {
     encoding: 'utf-8', timeout: 60_000,
   });
   const doc = firstJson(r.stdout);
   if (!doc || !doc.admissible) return null;
   const out = BigInt(doc.quoteAmountOut ?? 0);
-  if (out <= 0n) return null;
-  const floor = (out * (10_000n - SLIPPAGE_BPS)) / 10_000n;
-  return floor > feeOut ? floor - feeOut : null;
+  return out > 0n ? out : null;
 }
 
 /**
@@ -405,8 +418,24 @@ type ActionBody = {
   agent?: string;
   venue?: string;
   orderId?: string;
+  /**
+   * The amount being escrowed or swapped, in the INPUT coin's SMALLEST UNIT.
+   *
+   * `amountMist` is the OLD name, and it is still what the `topup` and `budget` routes read — the
+   * order path prefers `amountIn`. It means MIST and therefore only ever meant SUI, which is why a
+   * caller escrowing USDC must use `amountIn`.
+   */
+  amountIn?: string;
   amountMist?: string;
+  /**
+   * Which way: a key of `DIRECTIONS` (`SUI->USDC`, `USDC->SUI`). Absent means SUI -> USDC, which is
+   * what every caller predating a second direction means.
+   */
+  direction?: string;
+  /** The floor and the fee, in the OUTPUT coin's smallest unit. `*Usdc` are the old names. */
+  minOut?: string;
   minOutUsdc?: string;
+  feeOut?: string;
   feeOutUsdc?: string;
   fixAmountUsdc?: string;
   supplySui?: string;
@@ -423,6 +452,8 @@ type ActionBody = {
    * for the amount being swapped — this one is the ceiling.
    */
   budgetMist?: string;
+  /** Which coin the budget is for — a key of `COINS`. Absent means SUI. */
+  budgetCoin?: string;
   /**
    * Venue diffs, as id lists. NOT `allow`, which the `venue` kind already uses as the
    * allow-or-block flag for a single pool; overloading it would have made that kind's boolean
@@ -505,6 +536,16 @@ function actionFor(kind: string, body: ActionBody): {
     if (!doc) return { error: 'could not parse a proposal from the agent' };
     if (doc.decision !== 'PROPOSED') {
       return { refused: (doc.validation && doc.validation.reason) || doc.decision };
+    }
+    // A DIRECTION WITH NO VAULT PATH. The plan carries no command for USDC -> SUI, because
+    // `swap_and_route` escrows nothing and knows one direction only — and running a script that
+    // cannot do what was asked is worse than refusing. The escrow is how that direction trades,
+    // and it is built by the `order` path below.
+    if (!doc.plan.command) {
+      return {
+        refused: `${doc.plan.env?.SWAP_DIRECTION ?? 'that direction'} has no vault path — `
+          + 'the escrow is the only way to trade it',
+      };
     }
     return { script: doc.plan.command, env: doc.plan.env, proposal: doc };
   }
@@ -594,11 +635,22 @@ function actionFor(kind: string, body: ActionBody): {
       env.SUSPENDED = body.suspended ? 'true' : 'false';
       steps.push(body.suspended ? 'suspend' : 'resume');
     }
+    // The budget is a row of the OZ ledger, keyed by (cap_id, coin_type), so WHICH COIN is part of
+    // the instruction — the same digits are 0.01 SUI and 10 USDC. Absent means SUI, which is what
+    // every caller meant before a second coin existed; an unknown symbol is refused rather than
+    // granted against the wrong row.
+    let budgetCoin: string | null = null;
     if (body.budgetMist !== undefined && body.budgetMist !== null && body.budgetMist !== '') {
+      const symbol = String(body.budgetCoin ?? 'SUI').toUpperCase();
+      if (!COINS[symbol]) {
+        return { error: `budgetCoin must be one of ${Object.keys(COINS).join(', ')}` };
+      }
+      budgetCoin = symbol;
       const mist = toMist(body.budgetMist);
       if (mist === null) return { error: 'budgetMist must be a non-negative integer' };
+      env.BUDGET_COIN = symbol;
       env.BUDGET_MIST = String(mist);
-      steps.push('budget');
+      steps.push(`budget (${symbol})`);
     }
 
     // Venues are a SET on chain, so the panel sends a diff rather than a list: it knows what
@@ -627,7 +679,12 @@ function actionFor(kind: string, body: ActionBody): {
         action: 'set policy',
         hire: body.hire,
         steps,
-        budgetSui: env.BUDGET_MIST ? (Number(env.BUDGET_MIST) / 1e9).toString() : undefined,
+        // The value CARRIES its unit and its coin is named, rather than being divided by 1e9 in the
+        // one place that knew nothing about coins — which printed a USDC budget as though it were
+        // SUI (10 USDC came out as "0.00000001"). Same fix the order terms needed.
+        budget: budgetCoin && env.BUDGET_MIST
+          ? `${fromUnits(BigInt(env.BUDGET_MIST), COINS[budgetCoin].decimals)} ${budgetCoin}`
+          : undefined,
         agent: env.AGENT,
         suspended: typeof body.suspended === 'boolean' ? body.suspended : undefined,
         allow,
@@ -745,13 +802,44 @@ function actionFor(kind: string, body: ActionBody): {
     // From the chat, as text — and then the AGENT reads it, exactly as the swap path
     // does, so the model is never the thing that decides a number. Both routes land on
     // the same field, and by the time we are here the gate has already run on the text.
-    let amount = toMist(body.amountMist);
-    if (amount === null && typeof body.text === 'string') {
+    let amount = toMist(body.amountIn ?? body.amountMist);
+    // WHICH WAY, read from the same place the amount is: the agent's own extraction. The model is
+    // never the thing that decides a direction — the gate has already refused anything outside the
+    // table before this runs.
+    let direction = typeof body.direction === 'string' && body.direction ? body.direction : null;
+    // Set when the GATE refused the request, so that refusal is what the user hears.
+    let gateRefusal: string | null = null;
+    if ((amount === null || direction === null) && typeof body.text === 'string') {
       const doc = firstJson(runAgent(body.text).stdout);
-      if (doc && doc.decision === 'PROPOSED') amount = toMist(doc.plan?.env?.SWAP_MIST);
+      if (doc && doc.decision === 'PROPOSED') {
+        if (amount === null) {
+          amount = toMist(doc.plan?.env?.SWAP_AMOUNT_IN ?? doc.plan?.env?.SWAP_MIST);
+        }
+        if (!direction) direction = doc.plan?.env?.SWAP_DIRECTION ?? null;
+      } else if (doc) {
+        // The gate already turned this down, and it had a reason. Reporting a UNIT problem instead
+        // — "an amount in SUI is required" for a request that asked in USDC and was refused for
+        // having no USDC grant — sends the user to look in the wrong place entirely.
+        gateRefusal = (doc.validation && doc.validation.reason)
+          || doc.decision || 'the gate refused that request';
+      }
     }
+    // DEFAULTS TO SUI -> USDC. Not a fallback for a mistake: `direction` is optional, and a caller
+    // that omits it is asking in the only direction there was before a second one existed.
+    // Refusing it would break a working API to add a field.
+    if (!direction) direction = 'SUI->USDC';
+    const dir = DIRECTIONS[direction as Direction];
+    if (!dir) {
+      return { error: `direction must be one of ${Object.keys(DIRECTIONS).join(', ')}` };
+    }
+    if (gateRefusal) return { refused: gateRefusal };
     if (amount === null || amount <= 0n) {
-      return { error: 'amountMist must be a positive integer, or text the agent can read one from' };
+      // NAMES THE UNIT, and that matters now: `amountMist` was 0.01 SUI and would be 0.01 USDC in
+      // the other direction, so a message saying MIST for both is a unit error in prose.
+      return {
+        error: `an amount in ${dir.in.symbol} is required — body.amountIn, or text the agent can `
+          + 'read one from',
+      };
     }
 
     // The fee is the maker's offer to whoever fills, and it defaults to the FILLER'S OWN
@@ -766,24 +854,64 @@ function actionFor(kind: string, body: ActionBody): {
     // was present but not a number became `String(null)`, which is the four characters "null",
     // and that is what would have been sent as ORDER_FEE_OUT. The form refuses an empty field,
     // so this needed a malformed one rather than an absent one to fire.
-    const feeRaw = body.feeOutUsdc != null ? toMist(body.feeOutUsdc) : 10_000n;
+    // `feeOutUsdc` / `minOutUsdc` are the OLD names, from when one direction existed. They are read
+    // ONLY for a USDC-output order, because in the other direction those digits are MIST — and
+    // reading them as USDC would accept a floor a thousand times too low, quietly: a maker asking
+    // for 5 SUI would be agreeing to 0.005.
+    const outIsUsdc = dir.out.symbol === 'USDC';
+    const feeField = body.feeOut ?? (outIsUsdc ? body.feeOutUsdc : null);
+    const minField = body.minOut ?? (outIsUsdc ? body.minOutUsdc : null);
+    // `amount` is a `let` this branch reassigns, and TypeScript will not carry the null-check past
+    // that reassignment, so it is bound to a const before anything reads it.
+    const escrow = amount;
+
+    // THE QUOTE FIRST, because the floor and the fee are both compared against it.
+    //
+    // It used to be the other way round: the fee was passed INTO the quote helper, which returned
+    // `quote - slippage - fee`, so a default that knew nothing about the trade sat inside the
+    // arithmetic deciding whether the trade could exist. Splitting them is what lets the refusals
+    // below name a figure and an action instead of listing three possible causes.
+    const quote = minField == null ? quoteOut(escrow, direction as Direction) : null;
+
+    // THE DEFAULT IS THE FILLER's FLOOR — `MCP_MIN_FEE_OUT`, 0.01 of the output coin — because that
+    // is an ABSOLUTE COST, not a share of the trade. A fee below it is refused by the reference
+    // filler, so the order would escrow money nobody takes, which this file already calls worse than
+    // refusing at build time. (Ten basis points of the quote was tried here and was wrong for
+    // exactly that reason: it built 0.01 SUI orders carrying a 0.000012 USDC fee, which no filler
+    // accepts.)
+    //
+    // It follows that a MINIMUM TRADE SIZE exists, and that is not a bug to engineer away — the
+    // output has to cover the filler's floor plus something for the maker. The refusal below says so
+    // and names the input that would work.
+    const defaultFee = 10n ** BigInt(dir.out.decimals) / 100n;   // 0.01 of the output coin
+    const feeRaw = feeField != null ? toMist(feeField) : defaultFee;
     if (feeRaw === null) {
-      return { error: 'feeOutUsdc must be a non-negative integer' };
+      return { error: `the fee must be an integer in ${dir.out.symbol}'s smallest unit` };
     }
     const feeOut = feeRaw;
 
-    // The floor is REQUIRED here, unlike a swap whose bound the policy enforces at
-    // execution. An order fixes its floor at creation and the settlement asserts against
-    // that number later, so it has to be named now. From the form it is typed; from the
-    // chat it comes from a live quote, with the fee taken out of the same budget.
-    // Bound to a const so the check above survives the narrowing: `amount` is a `let` that the
-    // branch reassigns, and TypeScript will not carry the null-check past that reassignment.
-    const escrow = amount;
-    const minOut = body.minOutUsdc != null ? toMist(body.minOutUsdc) : quoteMinOut(escrow, feeOut);
+    // The floor. Typed by the caller, or derived: the quote less the maker's slippage tolerance,
+    // less the fee — settlement asserts `output - fee >= min_out`, so `min_out` is what the maker
+    // RECEIVES and the fee sits on top of it.
+    const minOut = minField != null
+      ? toMist(minField)
+      : quote != null
+        ? (quote * (10_000n - SLIPPAGE_BPS)) / 10_000n - feeOut
+        : null;
+
     if (minOut === null || minOut <= 0n) {
+      // THE REASONS ARE SPLIT, because they call for different actions: no quote is a transient
+      // market-data problem, while a fee that eats the room is a number to change. The old message
+      // listed three causes for every failure and named no figure, which is how a knife-edge fee
+      // came to read as an aggregator outage.
       return {
-        error: 'no floor is available for this order — either minOutUsdc was not a positive '
-          + 'integer, or a live quote could not be had, or the fee leaves no room at this size',
+        error: quote == null
+          ? `no live ${dir.in.symbol} -> ${dir.out.symbol} quote is available right now, and an `
+            + 'order must name its floor at creation — try again in a moment, or pass an explicit floor'
+          : `the fee (${fromUnits(feeOut, dir.out.decimals)} ${dir.out.symbol}) leaves no room at `
+            + `this size: ${fromUnits(escrow, dir.in.decimals)} ${dir.in.symbol} quotes `
+            + `${fromUnits(quote, dir.out.decimals)} ${dir.out.symbol} — escrow more, or name a `
+            + 'smaller fee',
       };
     }
 
@@ -795,9 +923,19 @@ function actionFor(kind: string, body: ActionBody): {
     // lets the user escrow more or offer less, and neither is something we should choose
     // for them.
     if (minOut < feeOut) {
+      // THE IMPLIED MINIMUM INPUT, derived rather than hardcoded: the output has to reach roughly
+      // twice the fee for the maker to keep as much as the filler takes. Computed from the live
+      // quote, because a constant threshold would be wrong by the afternoon.
+      const need = quote != null && quote > 0n
+        ? (escrow * feeOut * 2n) / quote
+        : null;
       return {
-        error: `the fee (${unitsToUsdc(feeOut)} USDC) is larger than what you would receive `
-          + `(${unitsToUsdc(minOut)} USDC) — escrow more SUI, or offer a smaller fee`,
+        error: `the fee (${fromUnits(feeOut, dir.out.decimals)} ${dir.out.symbol}) is larger than `
+          + `what you would receive (${fromUnits(minOut, dir.out.decimals)} ${dir.out.symbol}) — `
+          + (need != null
+            ? `too small a trade for the filler's minimum fee: escrow at least `
+              + `${fromUnits(need, dir.in.decimals)} ${dir.in.symbol}, or offer a smaller fee`
+            : `escrow more ${dir.in.symbol}, or offer a smaller fee`),
       };
     }
     // A TYPO GUARD, not a security boundary. What protects the maker is their
@@ -808,7 +946,12 @@ function actionFor(kind: string, body: ActionBody): {
     // 1 SUI and blocked a legitimate 10 SUI order — a typo guard that refuses real
     // intent has quietly become a limit, which is the wrong thing to have built by
     // accident.
-    if (amount > 10_000_000_000n) return { error: 'escrow above 10 SUI is not allowed here' };
+    // TEN WHOLE UNITS OF THE INPUT COIN, whatever it is. The old cap was 10 SUI in MIST, which would
+    // have let 10,000,000 USDC through the moment a second direction existed — a guard that stopped
+    // guarding without anything failing.
+    if (amount > 10n * 10n ** BigInt(dir.in.decimals)) {
+      return { error: `escrow above 10 ${dir.in.symbol} is not allowed here` };
+    }
 
     return {
       script: 'src/create-order.ts',
@@ -823,15 +966,21 @@ function actionFor(kind: string, body: ActionBody): {
       // is fixed at the source — toMist now returns null for absent input, which is what
       // makes `??` work at all.
       env: {
-        ORDER_AMOUNT_MIST: String(amount),
+        // ORDER_AMOUNT_IN, not ORDER_AMOUNT_MIST: the unit is the INPUT coin's, and the script
+        // refuses the old MIST name for a non-SUI input rather than reinterpreting it.
+        ORDER_DIRECTION: direction,
+        ORDER_AMOUNT_IN: String(amount),
         ORDER_MIN_OUT: String(minOut),
         ORDER_FEE_OUT: String(feeOut),
       },
+      // THE TERMS, and they now carry their own units. `escrowSui` and `minOutUsdc` named the coin
+      // in the KEY, which cannot survive a second direction; the pane renders these as they are.
       proposal: {
         action: 'escrow a swap order',
-        escrowSui: (Number(amount) / 1e9).toString(),
-        minOutUsdc: (Number(minOut) / 1e6).toString(),
-        feeOutUsdc: (Number(feeOut) / 1e6).toString(),
+        direction: `${dir.in.symbol} -> ${dir.out.symbol}`,
+        escrow: `${fromUnits(amount, dir.in.decimals)} ${dir.in.symbol}`,
+        minOut: `${fromUnits(minOut, dir.out.decimals)} ${dir.out.symbol}`,
+        feeOut: `${fromUnits(feeOut, dir.out.decimals)} ${dir.out.symbol}`,
       },
     };
   }
@@ -1287,190 +1436,6 @@ async function state() {
   };
 }
 
-const PAGE = `<!doctype html>
-<meta charset="utf-8">
-<title>on-device agent wallet</title>
-<style>
-  :root { color-scheme: dark; }
-  body { margin:0; font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
-         background:#111; color:#ddd; }
-  header { padding:14px 18px; border-bottom:1px solid #262626; }
-  h1 { margin:0; font-size:15px; font-weight:600; letter-spacing:.02em; }
-  header .sub { color:#777; font-size:12px; margin-top:4px; }
-  .wrap { display:grid; grid-template-columns:1fr 1fr 1fr; gap:1px;
-          background:#262626; min-height:calc(100vh - 108px); }
-  .pane { background:#111; padding:14px 16px; overflow:auto; }
-  .pane h2 { margin:0 0 10px; font-size:12px; text-transform:uppercase;
-             letter-spacing:.08em; color:#666; font-weight:600; }
-  .ask { display:flex; gap:8px; margin:12px 18px 0; }
-  input[type=text] { flex:1; background:#1a1a1a; border:1px solid #333; color:#eee;
-                     padding:10px 12px; border-radius:6px; font:inherit; }
-  input[type=text]:focus { outline:none; border-color:#4a7; }
-  button { background:#1f6f4a; border:0; color:#fff; padding:10px 16px;
-           border-radius:6px; font:inherit; cursor:pointer; }
-  button:disabled { background:#2a2a2a; color:#666; cursor:not-allowed; }
-  button.ghost { background:#1d1d1d; border:1px solid #333; }
-  pre { margin:0; white-space:pre-wrap; word-break:break-word; font:inherit; }
-  .k { color:#666; }
-  .ok { color:#5c8; } .bad { color:#e77; } .warn { color:#db3; }
-  .row { display:flex; justify-content:space-between; gap:12px; padding:3px 0; }
-  a { color:#6af; }
-  .stats { padding:12px 18px; border-top:1px solid #262626; color:#888; font-size:12px;
-           display:flex; gap:22px; flex-wrap:wrap; }
-  .stats b { color:#ccc; font-weight:600; }
-  .hires { padding:10px 18px; display:flex; gap:12px; flex-wrap:wrap;
-           align-items:center; border-bottom:1px solid #262626; }
-  .hires .label { color:#666; font-size:12px; text-transform:uppercase;
-                  letter-spacing:.08em; }
-  .hires .legend { color:#555; font-size:11px; width:100%; margin-top:2px; }
-  .wallet { padding:8px 18px; border-bottom:1px solid #262626; display:flex;
-            gap:10px; align-items:center; }
-  .wallet button { padding:5px 12px; font-size:12px; }
-  .owner { padding:10px 18px; display:flex; gap:16px; flex-wrap:wrap;
-           align-items:center; border-bottom:1px solid #262626; }
-  .owner .label { color:#666; font-size:12px; text-transform:uppercase;
-                  letter-spacing:.08em; }
-  .owner .grp { display:flex; gap:6px; align-items:center; color:#888; }
-  .owner input, .owner select { background:#1a1a1a; border:1px solid #333; color:#eee;
-                                padding:4px 6px; border-radius:4px; font:inherit;
-                                font-size:12px; }
-  .owner input { width:5.5em; }
-  /* Event sources are styled apart on purpose: a model's words are advisory, our own
-     progress is unconfirmed, and a chain-read fact is authoritative. */
-  .ev { font-size:12px; padding:2px 0; border-left:2px solid #333; padding-left:8px; }
-  .ev.model { border-color:#7a6a2a; color:#c9b26a; }
-  .ev.pipeline { border-color:#3a4a5a; color:#8fa8c0; }
-  .ev.chain { border-color:#2a5a3a; color:#8fd0a0; }
-  .ev.terminal { font-weight:600; }
-  .owner button { padding:4px 10px; font-size:12px; }
-  .hire { border:1px solid #2a2a2a; border-radius:6px; padding:6px 10px;
-          display:flex; gap:10px; align-items:center; }
-  .hire.off { opacity:.6; border-color:#5c2a2a; }
-  .hire button { padding:4px 10px; font-size:12px; }
-</style>
-<body data-token="__TOKEN__">
-<header>
-  <h1>on-device agent wallet</h1>
-  <div class="sub">model extracts &rarr; this code computes &rarr; the gate decides &rarr; the chain enforces</div>
-</header>
-
-<div class="wallet" id="wallet"><span class="k">wallet: not connected</span></div>
-
-<div class="ask">
-  <input id="q" type="text" placeholder="swap 0.05 SUI into USDC" autocomplete="off">
-  <button id="ask">Ask</button>
-  <button id="run" class="ghost" disabled>Run on-chain</button>
-</div>
-
-<div class="owner" id="owner">
-  <span class="label">owner actions</span>
-  <span class="grp">fund vault <input id="topupAmt" type="text" value="0.05"> SUI
-    <button class="ghost" id="topup">Fund</button></span>
-  <span class="grp">budget <select id="budHire"></select>
-    <input id="budAmt" type="text" value="0.03"> SUI
-    <button class="ghost" id="setBud">Set</button></span>
-  <span class="grp">swap pool <select id="poolHire"></select>
-    <button class="ghost" id="poolAllow">Allow</button>
-    <button class="ghost" id="poolBlock">Block</button></span>
-  <span class="grp">agent <input id="agentAddr" type="text" placeholder="0x…" size="10">
-    bound <input id="agentBps" type="text" value="5"> bps
-    <button class="ghost" id="handOver">Hand over</button></span>
-  <span class="grp"><button class="ghost" id="withdraw">Withdraw all</button></span>
-  <div class="legend">each of these asks the wallet to sign — nothing is signed by this page.
-    The hire selector above applies to both <b>swap pool</b> and <b>hand over</b>.
-    <b>swap pool</b> is the Cetus pool a hire may trade on: it edits the policy's allowlist, and a
-    new hire starts with none allowed. It does not stop the agent — use <b>Suspend</b> on the hire
-    below for that. <b>hand over</b> moves the grant to a different address and sets how far a swap
-    may move the price; the old agent loses every agent path, and the owner keeps every admin path.</div>
-  <div class="msg" id="ownerMsg"></div>
-</div>
-
-<div class="owner" id="position">
-  <span class="label">position</span>
-  <span class="grp"><button class="ghost" id="posOpen">Open guarded position</button></span>
-  <span class="grp">fund <input id="depUsdc" type="text" value="0.5"> USDC
-    <input id="depSui" type="text" value="0.6"> SUI headroom
-    <button class="ghost" id="depBtn">Fund</button></span>
-  <span class="grp">range <input id="rebLo" type="text" value="68800"> ->
-    <input id="rebHi" type="text" value="69200">
-    <button class="ghost" id="rebBtn">Rebalance</button></span>
-  <span class="grp"><button class="ghost" id="redBtn">Exit</button></span>
-  <div class="legend">in order: open, fund, move the range. Exit closes the position for good and
-    leaves the guard holding a position that no longer exists, so open again before moving or exiting
-    once more. Rebalance is the <b>guard's</b> agent — a different agent from the policy's, and
-    currently your own address, which is why it still passes here. Swaps answer to the policy's
-    agent instead: whoever <b>hand over</b> names.</div>
-</div>
-
-<div class="owner" id="escrow">
-  <span class="label">escrow swap</span>
-  <span class="grp">escrow <input id="ordAmt" type="text" value="0.01"> SUI
-    floor <input id="ordMin" type="text" value="0.005"> USDC
-    fee <input id="ordFee" type="text" value="0.01"> USDC
-    <button class="ghost" id="ordMake">Create order</button></span>
-  <span class="grp">burn settled <input id="ordId" type="text" placeholder="0x…" size="10">
-    <button class="ghost" id="ordBurn">Burn</button></span>
-  <div class="legend">step 1 of the escrow flow, and the only step where money moves — the coin
-    leaves your wallet here and sits inside the order until an agent fills it, or it expires and
-    anyone may refund it to you. Your floor is enforced by the same function that moves the funds,
-    so it cannot be undercut. An agent fills the order with <b>settle-order.js</b>; you reclaim its
-    storage afterwards.</div>
-</div>
-
-<div class="hires" id="hires"><span class="label">hires</span></div>
-    // The theme's two families, and only these. Each package writes its faces to ./files/, which
-    // the CSS build rewrites to /fonts/, so one flat namespace is enough: the package name is a
-    // prefix of every file, which is what keeps the basename unique across the two directories.
-    // Both are searched rather than one path being derived, so neither can be guessed at.
-    const fontDirs = [
-      'node_modules/@fontsource-variable/nunito/files',
-      'node_modules/@fontsource/pt-serif/files',
-    ];
-    for (const dir of fontDirs) {
-      try {
-        // Annotated explicitly because two configs were disagreeing about it. `readFileSync`
-        // without an encoding returns a Buffer, which IS a Uint8Array — the compiler agreed
-        // with that and the editor did not, depending on which tsconfig each had loaded. Saying
-        // the type rather than inferring it removes the question, and costs nothing.
-        const file: Uint8Array = fs.readFileSync(path.join(dir, name));
-        return send(200, file, 'font/woff2');
-      } catch {
-        // Not in this package. Try the next, and only 404 once every one has been tried.
-      }
-    }
-    return send(404, 'no such font', 'text/plain; charset=utf-8');
-  }
-
-  if (req.method === 'GET' && req.url === '/texture.png') {
-    // The theme's paper grain. A literal path, like the page modules above, so the request can
-    // never steer the read out of src/web/app/. Bytes rather than text: it is a PNG, and it is
-    // served from here rather than fetched from the theme's CDN for the same reason the fonts
-    // and the wallet bundle are.
-
-<div class="wrap">
-  <div class="pane">
-    <h2>1 &middot; agent</h2>
-    <div id="agent" class="k">waiting for a request…</div>
-  </div>
-  <div class="pane">
-    <h2>2 &middot; gate</h2>
-    <div id="gate" class="k">nothing to decide</div>
-  </div>
-  <div class="pane">
-    <h2>3 &middot; chain</h2>
-    <div id="chain" class="k">nothing submitted</div>
-  </div>
-</div>
-
-<div class="stats" id="stats"></div>
-
-<!-- The page's code lives in src/web/page.js, where the linter and node --check can see
-     it. Embedding it here as inline text is what broke it twice: an escape in a regex
-     and an escape in a string were both consumed before reaching the browser. The token
-     rides on the body tag as a data attribute rather than a script tag, so nothing is
-     injected into script context at all. -->
-<script type="module" src="/wallet.js"></script>
-<script type="module" src="/page.js"></script>`;
 
 // A THROW IN A REQUEST HANDLER MUST NOT KILL THE SERVER.
 //
@@ -1513,34 +1478,69 @@ const server = http.createServer((req, res) => {
     return send(200, walletBundleJs, 'text/javascript; charset=utf-8');
   }
 
-  // The page's own modules. Read on every request rather than cached at startup:
-  // editing one and reloading the browser is the whole dev loop, and a
-  // startup-cached copy would quietly serve something nobody wrote any more.
-  //
-  // Names are matched literally above, so the path handed to readFileSync is never
-  // derived from the request and cannot be steered out of src/web/.
-  // Indexed by a request path, so it needs a signature: without one TypeScript treats the
-  // literal's keys as the only valid ones, which is right for the four routes that exist and
-  // wrong for the lookup that decides whether a path IS one of them.
-  const moduleRoutes: Record<string, string> = { '/page.js': 'page.js', '/markup.js': 'markup.js', '/units.js': 'units.ts', '/events.js': 'events.ts' };
-  // `req.url` is optional on the request type, so it is defaulted rather than asserted: an
-  // absent url should miss every route, which is what an empty string does.
-  const url = req.url ?? '';
-  if (req.method === 'GET' && moduleRoutes[url]) {
-    const name = moduleRoutes[url];
-    try {
-      return send(200, fs.readFileSync(`src/web/${name}`, 'utf8'),
-        'text/javascript; charset=utf-8');
-    } catch (e) {
-      return send(500, `src/web/${name} unreadable: ${errText(e)}`, 'text/plain; charset=utf-8');
-    }
-  }
 
   if (req.method === 'GET' && (req.url ?? '').startsWith('/fonts/')) {
     // Only ever a font file, named from a fixed set. `basename` is what keeps a crafted path
     // from walking out of the package directory.
     const name = path.basename((req.url ?? '').split('?')[0]);
     if (!/^[a-z0-9-]+\.woff2$/.test(name)) return send(404, 'not found', 'text/plain; charset=utf-8');
+    // The theme's two families, and only these. Each package writes its faces to ./files/, which
+    // the CSS build rewrites to /fonts/, so one flat namespace is enough: the package name is a
+    // prefix of every file, which is what keeps the basename unique across the two directories.
+    // Both are searched rather than one path being derived, so neither can be guessed at.
+    const fontDirs = [
+      'node_modules/@fontsource-variable/nunito/files',
+      'node_modules/@fontsource/pt-serif/files',
+    ];
+    for (const dir of fontDirs) {
+      try {
+        // Annotated explicitly because two configs were disagreeing about it. `readFileSync`
+        // without an encoding returns a Buffer, which IS a Uint8Array — the compiler agreed
+        // with that and the editor did not, depending on which tsconfig each had loaded. Saying
+        // the type rather than inferring it removes the question, and costs nothing.
+        const file: Uint8Array = fs.readFileSync(path.join(dir, name));
+        return send(200, file, 'font/woff2');
+      } catch {
+        // Not in this package. Try the next, and only 404 once every one has been tried.
+      }
+    }
+    return send(404, 'no such font', 'text/plain; charset=utf-8');
+  }
+
+  if (req.method === 'GET' && (req.url ?? '').startsWith('/icons/')) {
+    // The identity illustrations. A FIXED NAME LIST, like the fonts route: `basename` is what keeps
+    // a crafted path from walking out of the directory, and the whitelist keeps this route from
+    // serving anything else that ever lands in that folder.
+    const name = path.basename((req.url ?? '').split('?')[0]);
+    if (!/^(pink|blonde|black|teal|blue)\.png$/.test(name)) {
+      return send(404, 'not found', 'text/plain; charset=utf-8');
+    }
+    try {
+      const file: Uint8Array = fs.readFileSync(`src/web/app/icons/${name}`);
+      return send(200, file, 'image/png');
+    } catch {
+      return send(404, 'no such icon', 'text/plain; charset=utf-8');
+    }
+  }
+
+  if (req.method === 'GET' && req.url === '/suidobashi.jpg') {
+    // The home page's hero — Suidobashi, for the name. A literal path like the texture's, so the
+    // request cannot steer the read out of src/web/app/. Served at 1536×1024 (re-encoded from the
+    // 1536×1024 PNG, 2.8 MB → 580 KB): the hero fills half the viewport, so 1536 is the width a
+    // retina laptop actually asks for, and PNG was simply the wrong container for an RGB image.
+    try {
+      const file: Uint8Array = fs.readFileSync('src/web/app/suidobashi.jpg');
+      return send(200, file, 'image/jpeg');
+    } catch {
+      return send(404, 'no hero', 'text/plain; charset=utf-8');
+    }
+  }
+
+  if (req.method === 'GET' && req.url === '/texture.png') {
+    // The theme's paper grain. A literal path, like the page modules above, so the request can
+    // never steer the read out of src/web/app/. Bytes rather than text: it is a PNG, and it is
+    // served from here rather than fetched from the theme's CDN for the same reason the fonts
+    // and the wallet bundle are.
     try {
       const file: Uint8Array = fs.readFileSync('src/web/app/texture.png');
       return send(200, file, 'image/png');
@@ -1566,14 +1566,16 @@ const server = http.createServer((req, res) => {
   }
 
   if (req.method === 'GET' && req.url === '/') {
-    // Token injected here rather than fetched, so the page itself never has to ask
-    // for it. A cross-origin caller can reach the port but cannot read this.
+    // `/` IS THE SAME PAGE. ONE bundle serves both, and it decides which of the two states to show
+    // from the wallet's own connection state — which the server cannot know, since the wallet lives
+    // in the browser. A second bundle for the way in would be a second startup build step and a
+    // second thing to keep in step, for a page whose whole content is one button.
     //
-    // It rides on the body tag as a data attribute, not in a <script> block: the
-    // value is hex today, but keeping it out of script context means the injection
-    // cannot become script injection whatever the token's shape becomes.
-    return send(200, PAGE.replace('__TOKEN__', TOKEN), 'text/html; charset=utf-8');
+    // The token is injected here for the same reason as at /app: the page never has to ask for it,
+    // and a cross-origin caller can reach the port but cannot read this response.
+    return send(200, APP_PAGE.replace('__TOKEN__', TOKEN), 'text/html; charset=utf-8');
   }
+
 
   if (req.url?.startsWith('/api/')) {
     if (req.headers['x-agent-token'] !== TOKEN) {
@@ -1804,6 +1806,57 @@ const server = http.createServer((req, res) => {
         // The request rebuilt from the parsed intent, with no hire name in it — so a client
         // can answer by naming one without re-naming both.
         const template = typeof doc?.template === 'string' ? doc.template : '';
+
+        // A READ IS ANSWERED HERE, not proposed.
+        //
+        // There is nothing to sign and nothing to approve — the action IS the answer — so the flow
+        // ends one step earlier than a swap's. The page needs no branch of its own: it already
+        // stops on any decision that is not PROPOSED, which is the same shape the capability
+        // question above returns. Emitting the answer here rather than teaching the client about
+        // reads is what keeps the browser ignorant of the difference.
+        if (decision === 'PROPOSED' && doc?.plan?.read) {
+          const server = serverForAction(listTalents().map((t) => t.id), String(doc?.intent?.action ?? ''));
+          // A SERVER, NOT A DIFFERENT ACTION. The talent says which server answers this action,
+          // so a talent whose server is missing is a refusal rather than a quiet fallback.
+          const refusal = (reason: string) => send(200, JSON.stringify({
+            ...r, decision: 'REFUSED',
+            events: [event('refused', 'pipeline', ending('refused', { reason }))],
+          }));
+          if (!server) return refusal('no installed talent answers that read');
+
+          const url = `${server}/query`;
+          try {
+            // The query comes from the PLAN, which is our own code's, not from the page — the
+            // same rule the swap path follows for amounts and venues. The browser names the
+            // action and nothing else.
+            const reply = await fetch(url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(doc.plan.query ?? {}),
+              signal: AbortSignal.timeout(10_000),
+            });
+            const out: any = await reply.json();
+            if (!reply.ok) {
+              return refusal(`${server} answered ${reply.status}: ${out?.error ?? 'no reason given'}`);
+            }
+            // The answer, in the units a person reads. `fromUnits` rather than a division: it is
+            // the project's one formatter, and money never goes through a float.
+            const coins: any[] = Array.isArray(out?.coins) ? out.coins : [];
+            const text = coins.length
+              ? `balances for ${out.owner}\n`
+                + coins.map((c) => `${c.symbol} ${fromUnits(c.amount, Number(c.decimals))}`).join('\n')
+              : 'the query server returned no balances';
+            // CHAIN-sourced, because these numbers came back from a read of the chain. That is the
+            // one thing the source means: not a guess, and not our own progress.
+            return send(200, JSON.stringify({
+              ...r, decision: 'ANSWERED',
+              events: [event('answered', 'chain', text)],
+            }));
+          } catch (e) {
+            return refusal(`query server unreachable at ${url}: ${errText(e)}`);
+          }
+        }
+
         const events = [
           event('extracting', 'model', 'the local model is reading the request'),
           decision === 'PROPOSED'

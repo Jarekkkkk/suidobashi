@@ -19,7 +19,7 @@
  */
 import 'dotenv/config';
 import {
-  PACKAGE_LATEST_ID, SUI_TYPE, CLOCK_ID, DEPLOYER,
+  PACKAGE_LATEST_ID, CLOCK_ID, DEPLOYER, orderCoinType,
 } from './addresses.js';
 
 const EMIT_BYTES = process.argv.includes('--emit-bytes');
@@ -42,6 +42,15 @@ async function main() {
   const sharedVersion = o.owner?.Shared?.initialSharedVersion;
   if (!sharedVersion) throw new Error(`${ORDER_ID} is not a shared object — an order should be`);
   const expiresAtMs = Number(o.json?.expires_at_ms ?? 0);
+
+  // WHICH COIN THE ORDER HOLDS, from the object's own type. Hardcoded to SUI until a USDC order was
+  // refunded and the VM refused the call with `CommandArgumentError { kind: TypeMismatch }` — the
+  // same bug `burn-order.ts` had, on the other half of the recovery path. `orderCoinType` is the
+  // reader the filler already uses, so all three sides agree about what an order holds.
+  const coinType = orderCoinType(o.type);
+  if (!coinType) {
+    throw new Error(`${ORDER_ID} is not an Order<T> — its type is ${o.type ?? '(none)'}`);
+  }
 
   // THE SENDER MUST BE WHOEVER SIGNS.
   //
@@ -91,7 +100,7 @@ async function main() {
   tx.setSender(signerAddress);
   tx.moveCall({
     target: `${PACKAGE_LATEST_ID}::order::refund`,
-    typeArguments: [SUI_TYPE],
+    typeArguments: [coinType],
     arguments: [
       tx.object(ORDER_ID),
       tx.object(CLOCK_ID),
@@ -126,6 +135,7 @@ async function main() {
       step: 'refund an expired order',
       signer: signerAddress,
       order: ORDER_ID,
+      coin: coinType,
       maker: o.json?.maker ?? null,
       funds: o.json?.funds ?? null,
       expiresAtMs,

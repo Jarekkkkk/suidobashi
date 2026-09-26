@@ -265,6 +265,37 @@ public fun spend_to_destination<C>(
     });
 }
 
+/// Draw from the vault WITHOUT deciding where the value goes, and hand the balance back.
+///
+/// THE MISSING HALF. The vault path (`swap_and_route`) can spend and cannot enforce a maker's floor,
+/// because it takes a caller-supplied price limit. The order path enforces a floor and cannot spend,
+/// because it escrows from the wallet and only READS the allowance. Neither could do both, which is
+/// why the budget bounded nothing that also had a commitment behind it.
+///
+/// THE LEDGER IS DECREMENTED by `spend_vault::spend`, and that is the whole point: it turns the
+/// budget from a per-order CEILING into a spending total. The wallet path reads the allowance and
+/// never writes it, so N orders of the same size each pass a grant that covers one.
+///
+/// AGENT-GATED, so it inherits the agent check, the vault binding — and `!suspended`. That last one
+/// is a difference worth naming rather than discovering: the wallet-escrow path never touches the
+/// policy and so cannot see the kill switch (`order.move` never reads `is_suspended`), while this
+/// path cannot spend from a suspended grant. Both are correct for what they are.
+///
+/// The destination is deliberately NOT a parameter. Value leaves the vault here, and a caller who
+/// could choose a destination could commit the owner's money to any address — so the ORDER fixes it
+/// to `policy.destination`, exactly as the vault path does.
+public fun spend_balance_from_vault<C>(
+    policy: &Policy,
+    vault: &mut Vault,
+    amount: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+): Balance<C> {
+    assert_agent_gates(policy, vault, ctx);
+    let cap = dynamic_object_field::borrow<CapKey, SpenderCap>(&policy.id, CapKey {});
+    spend_vault::spend<C>(vault, cap, amount, clock, ctx)
+}
+
 /// Swap against an allowlisted Cetus CLMM pool and route both the output and any
 /// unspent input to `policy.destination`.
 ///

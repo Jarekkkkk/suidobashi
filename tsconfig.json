@@ -33,8 +33,6 @@
   ],
   "exclude": [
     "src/verify-*.js",
-    "src/demo-*.js",
-    "src/web/page.js",
-    "src/web/markup.js"
+    "src/demo-*.js"
   ]
 }

@@ -9,13 +9,14 @@
  * colour, the signing pane sits on the card colour, and the conversation is the page. That is
  * the whole reason a three-pane layout reads as one workspace instead of three boxes.
  *
- * Ported from src/web/page.js, which stays in the tree until this is confirmed working — the
- * old UI is the reference to check the port against, and deleting it first would throw away the
- * only thing that can tell us the port is faithful.
+ * Ported from src/web/page.js, WHICH IS NOW DELETED — this is the only UI. What did NOT come across
+ * is the admin surface: `topup`, `withdraw` and the position lifecycle have no control here, so they
+ * are reached through the `--emit-bytes` scripts instead of a page. That gap is real and is written
+ * down in HANDOFF rather than left for someone to discover by looking for a button.
  */
 import { createRoot } from 'react-dom/client';
 import { useState, useEffect, useCallback } from 'react';
-import { wallet, short } from '@/lib/wallet';
+import { wallet } from '@/lib/wallet';
 import { api, type Event } from '@/lib/api';
 // The vocabulary. ONE hop, not two: this file is at src/web/app/, so `..` is src/web/.
 // Extensionless, because a `.js` specifier resolves for the compiler and not for the server.
@@ -23,7 +24,7 @@ import { TERMINAL_KINDS, type EventKind } from '../events';
 import { Chat } from '@/components/Chat';
 import { LeftPane } from '@/components/LeftPane';
 import { SigningPane } from '@/components/SigningPane';
-import { Button } from '@/components/ui/button';
+import { Home } from '@/components/Home';
 import { cn } from '@/lib/utils';
 
 /**
@@ -147,6 +148,9 @@ function App() {
     setNote(null);
     try {
       setAddress(await w.connect('slush'));
+      // IN, and the URL says so: the app lives at /app and Home at /. One bundle serves both, so
+      // this is a history write rather than a navigation — no reload and no second bundle.
+      history.replaceState(null, '', '/app');
     } catch (e) {
       setNote(e instanceof Error ? e.message : String(e));
     }
@@ -154,16 +158,52 @@ function App() {
 
   async function disconnect() {
     await wallet()?.disconnect();
+    // The effect below turns this into the home page. Clearing the address IS the action — one
+    // place decides what "not connected" means on screen.
     setAddress(null);
   }
 
-  return (
-    <div className="flex h-full min-w-0 overflow-hidden bg-background text-foreground">
+  /**
+   * NOT CONNECTED MEANS THE HOME PAGE, and the address is the only thing consulted.
+   *
+   * GUARDED ON `ready` so a slow wallet-bridge load cannot bounce: without it the first render has
+   * no address, and the user is sent home before the bridge has had a chance to report one. ONE
+   * DIRECTION ONLY — this never sends a CONNECTED user anywhere, so there is no loop to get into.
+   */
+  useEffect(() => {
+    if (!ready || address) return;
+    if (window.location.pathname !== '/') history.replaceState(null, '', '/');
+  }, [ready, address]);
+
+  // ONE SHELL, THREE STATES. The texture is the theme's paper grain — fixed, and out of the flex
+  // flow — and it belongs on all three, because a page that loses its paper reads as a different
+  // product.
+  const shell = (children: React.ReactNode) => (
     <>
-    {/* The theme's paper grain: fixed, full-viewport, and out of the flex flow entirely rather
-        than a flex item that happens to be positioned. A sibling of the app shell, not a child,
-        so no pane can ever lay out around it. */}
-    <div className="texture" />
+      <div className="texture" />
+      {children}
+    </>
+  );
+
+  // THE BRIDGE IS STILL LOADING, which is its own state rather than "not connected". Rendering
+  // Home here would flash a connect button at somebody who is already connected; rendering the app
+  // would flash panes that cannot sign.
+  if (!ready) {
+    return shell(
+      <div className="flex h-full items-center justify-center">
+        <p className="text-[12px] text-muted-foreground">loading the wallet bridge…</p>
+      </div>,
+    );
+  }
+
+  // NOT CONNECTED IS THE HOME PAGE: the wallet is the account, so there is nothing to show and
+  // nothing to sign without one.
+  if (!address) {
+    return shell(<Home ready={ready} note={note} onConnect={() => void connect()} />);
+  }
+
+  return shell(
+    <div className="flex h-full min-w-0 overflow-hidden bg-background text-foreground">
       {/* Left — what is installed, and what is left over. Its own surface, so it reads as a
           region of the app rather than as a box with a border. */}
       <aside className={cn(
@@ -175,6 +215,8 @@ function App() {
           say={say}
           onTerms={setTerms}
           chatId={chatId}
+          address={address}
+          onDisconnect={() => void disconnect()}
           onSelectChat={(id) => void openChat(id)}
           onNewChat={(id) => { setChatId(id); setEvents([]); }}
           onChatDeleted={() => void settle()}
@@ -184,27 +226,14 @@ function App() {
       {/* Centre — the conversation. The page colour, because it is the thing you look at. */}
       <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
         <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border px-4">
-          <span className="text-[13px] font-medium tracking-tight">sui-tokyo</span>
+          <span className="text-[13px] font-medium tracking-tight">suidobashi</span>
           <span className="hidden rounded-sm bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground lg:inline">
             on-device agent wallet
           </span>
 
-          <div className="ml-auto flex items-center gap-2">
-            {address ? (
-              <>
-                <span className="font-mono text-[11px] text-muted-foreground">
-                  {short(address)}
-                </span>
-                <Button variant="ghost" size="sm" onClick={() => void disconnect()}>
-                  disconnect
-                </Button>
-              </>
-            ) : (
-              <Button size="sm" onClick={() => void connect()} disabled={!ready}>
-                {ready ? 'connect wallet' : 'loading wallet…'}
-              </Button>
-            )}
-          </div>
+          {/* THE ACCOUNT IS NOT HERE ANY MORE. The address and its actions moved to the left
+              pane's footer, beside the identity they belong to — one place, not two. This header
+              keeps the app's name. */}
         </header>
 
         {note && (
@@ -224,9 +253,8 @@ function App() {
       )}>
         <SigningPane events={events} terms={terms} />
       </aside>
-    </div>
+    </div>,
   );
-    </>
 }
 
 const root = document.getElementById('app');

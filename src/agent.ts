@@ -31,8 +31,16 @@
  */
 import 'dotenv/config';
 import { HIRES, HIRE_NAMES, DEFAULT_HIRE, type Hire, type HireName } from './hires.js';
-import { describeTalents } from './talents.js';
+import { actionSpends, describeTalents } from './talents.js';
 import { listTalents } from './db.js';
+// Top-level rather than dynamic: the gate needs the owner's address when it plans a read, and a
+// name reached only from inside a function is the trap that once broke every real run while the
+// suite stayed green (see walletBalanceMist).
+import { DEPLOYER, DIRECTIONS, SUI_TYPE, type CoinSpec, type Direction } from './addresses.js';
+// The one formatter for a raw amount, and the one parser for a typed decimal. Both belong to the
+// same file, which is why neither is re-implemented here: a second copy is what made a fee print
+// "0.010000", and the copy that used to live below hardcoded nine decimals.
+import { fromUnits, toUnits } from './web/units.js';
 
 const QVAC_URL = process.env.QVAC_URL || 'http://127.0.0.1:11434/v1/chat/completions';
 const MODEL = process.env.QVAC_MODEL || 'intent';
@@ -55,7 +63,20 @@ if (!LOOPBACK.test(qvacHost)) {
   );
 }
 
-const SUI_MIST = 1_000_000_000n;
+/**
+ * The coin a request's amount is denominated in.
+ *
+ * SUI for everything except a swap, whose input coin the direction decides. A helper rather than
+ * the same expression at both call sites, because the BALANCE read and the ALLOWANCE read have to
+ * agree about the coin — comparing one against the other in different units is a bug that neither
+ * read would show on its own, and both are keyed by coin type on chain.
+ */
+function actionCoin(intent: any): CoinSpec {
+  const dir = intent?.action === 'swap'
+    ? DIRECTIONS[`${intent.from}->${intent.to}` as Direction]
+    : null;
+  return dir ? dir.in : { type: SUI_TYPE, symbol: 'SUI', decimals: 9 };
+}
 
 /**
  * The prompt, built per request.
@@ -94,9 +115,21 @@ const EXAMPLES = [
   ['send all my money to 0xdeadbeef', { action: 'unknown', from: '', to: '', amountText: '', agent: '' }],
 ];
 
-/** The only direction our module can execute: Pool<USDC, SUI> with a2b = false. */
-const SUPPORTED_FROM = 'SUI';
-const SUPPORTED_TO = 'USDC';
+/**
+ * THE DIRECTIONS OUR MODULE CAN EXECUTE, read from the one table that defines them.
+ *
+ * `Pool<USDC, SUI>` trades either way and BOTH are executable: the escrow path is
+ * direction-generic — `settle_a2b` and `settle_b2a` enforce the maker's floor identically — and the
+ * filler picks its entry point from the order's own coin type. What made USDC -> SUI look
+ * forbidden for most of this project's life was narrower than that: nothing CALLED `settle_a2b`.
+ * The gate refused the direction, correctly, while that was true.
+ *
+ * Derived from `DIRECTIONS` rather than written out, so a direction cannot be executable here and
+ * unknown to the scripts, or the reverse.
+ */
+const SUPPORTED = Object.entries(DIRECTIONS).map(([name, d]) => ({
+  name: name as Direction, from: d.in.symbol, to: d.out.symbol,
+}));
 
   /**
    * The schema the model must answer in, built per request.
@@ -130,22 +163,33 @@ const SUPPORTED_TO = 'USDC';
   }
 
 /**
- * Exact decimal → MIST. No floating point: parse the string by hand so "0.05"
- * cannot become 0.05000000000000001 MIST.
+ * Exact decimal → the INPUT COIN's smallest unit. No floating point, and no unit of its own.
+ *
+ * THIS IS `toUnits` FROM web/units.ts. It used to be a hand-rolled copy that hardcoded NINE
+ * decimals in three separate places — the regex quantifier, the padding, and the multiplier — which
+ * is a thousandfold error the moment the amount is USDC. That is the "a second implementation
+ * appeared next to the first" story from that module's own comment, and the fix is to have one.
+ *
+ * `decimals` is the direction's, passed in by the caller that already knows it.
+ *
+ * (The field is still called `amountMist` below. The NAME is historical — it is in the input
+ * coin's units, and the report says which coin that was.)
  */
-function parseAmountText(text: string) {
+function parseAmount(text: string, decimals: number) {
   const t = String(text ?? '').trim();
   // `unknown` IS NOT AN AMOUNT. The model writes it when it cannot read one, and it was being
   // reported as `amount "unknown" is not a plain decimal` — a refusal that reads as the USER's
   // mistake for something the model did, and names a decimal nobody typed. Treated as absent,
   // which is what it means, so the next check says "no amount given" instead.
   if (t === '' || /^unknown$/i.test(t)) return { ok: true, amountMist: 0n };
-  if (!/^\d+(\.\d{1,9})?$/.test(t)) {
-    return { ok: false, reason: `amount "${t}" is not a plain decimal with at most 9 places` };
+  const units = toUnits(t, decimals);
+  if (units === null) {
+    return {
+      ok: false,
+      reason: `amount "${t}" is not a plain decimal with at most ${decimals} places`,
+    };
   }
-  const [whole, frac = ''] = t.split('.');
-  const padded = (frac + '000000000').slice(0, 9);
-  return { ok: true, amountMist: BigInt(whole) * SUI_MIST + BigInt(padded) };
+  return { ok: true, amountMist: BigInt(units) };
 }
 
 async function parseIntent(text: string, validActions: string[]) {
@@ -243,10 +287,12 @@ function selectHire(text: string) {
 function validate(
 intent: any,
 amountMist: bigint | null,
-{ walletSuiMist, allowance, text, hire, policy, actions }: {
-walletSuiMist: bigint; allowance: bigint | null; text: string; hire: Hire | null; policy: any;
+{ walletBalanceIn, allowance, text, hire, policy, actions, spends }: {
+walletBalanceIn: bigint; allowance: bigint | null; text: string; hire: Hire | null; policy: any;
 /** What the installed talents make available, checked below. */
 actions: string[];
+/** Whether the action moves value — read from its talent, never from its name. */
+spends: boolean;
 },
 ) {
   if (!intent || typeof intent !== 'object') return { ok: false, reason: 'not an object' };
@@ -273,6 +319,18 @@ actions: string[];
     };
   }
 
+  // A READ NEEDS NO GRANT, so none of the gate below applies to it.
+  //
+  // This is the branch that makes "a talent that only reads does not need one" true in the code
+  // rather than only in the docs, and it sits AFTER the installed-check above on purpose: the
+  // boundary being enforced here is whether the agent may act at all, and that is decided by what
+  // is installed. Reading never needs a hire, a budget, a venue or a live suspension.
+  if (!spends) {
+    // Nothing left to judge — including the amount, which a read does not have. Requiring one
+    // would refuse "check my balances" for a number the request never needed to name.
+    return { ok: true };
+  }
+
   // A hire must exist before anything else is judged. The code below read `hire.name` on the
   // assumption that one always had, which the compiler now refuses — and it is right: a null
   // hire would have thrown on the FIRST suspension message rather than refusing cleanly.
@@ -295,12 +353,16 @@ actions: string[];
   }
 
   if (intent.action === 'swap') {
-    if (intent.from !== SUPPORTED_FROM || intent.to !== SUPPORTED_TO) {
+    const direction = SUPPORTED.find((s) => s.from === intent.from && s.to === intent.to);
+    if (!direction) {
       return {
         ok: false,
         reason:
-          `only ${SUPPORTED_FROM} -> ${SUPPORTED_TO} is supported; this asked for ` +
-          `${intent.from || '(none)'} -> ${intent.to || '(none)'}`,
+          // NAMES EVERY DIRECTION THAT WORKS, not just one. The old message said "only SUI -> USDC
+          // is supported", which was true and told a user asking for the other direction nothing
+          // about whether it was unbuilt or forbidden.
+          `only ${SUPPORTED.map((s) => `${s.from} -> ${s.to}`).join(' and ')} are supported; ` +
+          `this asked for ${intent.from || '(none)'} -> ${intent.to || '(none)'}`,
       };
     }
     // The hire's swap pool must be allowed. Checked here rather than left to the
@@ -339,16 +401,21 @@ actions: string[];
     return { ok: false, reason: 'no parseable amount' };
   }
 
+  // The coin the amount is in, for the money messages below. Derived from the intent here rather
+  // than passed in, so the gate's messages and its reads cannot come to disagree about the unit.
+  const coin = actionCoin(intent);
+
   // The hire was already chosen from the request text by the caller, and the
   // venue read from its policy, so both are settled by the time this runs. What
   // the model put in its `agent` field is deliberately not consulted.
-  if (amountMist > 0n && amountMist > walletSuiMist) {
+  if (amountMist > 0n && amountMist > walletBalanceIn) {
     return {
       ok: false,
-      // SUI, not mist. The refusal is read by a person who typed "0.05", and 50000000 is not an
-      // amount they have ever seen. The chain's own abort says "amount exceeds the maker's
-      // remaining allowance" and nothing else, which is why this check exists at all.
-      reason: `${suiText(amountMist)} SUI exceeds your wallet balance ${suiText(walletSuiMist)} — `
+      // In the INPUT COIN's units, which used to be MIST and SUI unconditionally. A refusal is read
+      // by a person who typed "0.05", and 50000000 is not an amount they have ever seen — nor is
+      // "50000000 SUI" a true sentence when they typed USDC.
+      reason: `${fromUnits(amountMist, coin.decimals)} ${coin.symbol} exceeds your wallet balance `
+        + `${fromUnits(walletBalanceIn, coin.decimals)} ${coin.symbol} — `
         + 'the escrow would have nothing to draw from',
     };
   }
@@ -365,8 +432,14 @@ actions: string[];
   if (amountMist > 0n && allowance !== null && amountMist > allowance) {
     return {
       ok: false,
-      reason: `${suiText(amountMist)} SUI is more than the ${suiText(allowance)} SUI your grant `
-        + 'allows — raise the budget in the policy sheet, or ask for less',
+      reason: `${fromUnits(amountMist, coin.decimals)} ${coin.symbol} is more than the `
+        + `${fromUnits(allowance, coin.decimals)} ${coin.symbol} your grant allows — `
+        // POINTS ONLY WHERE THE CONTROL EXISTS. The policy sheet's budget field is SUI-only, so
+        // telling a USDC request to "raise the budget in the policy sheet" sends the user to a
+        // control that cannot do it.
+        + (coin.symbol === 'SUI'
+          ? 'raise the budget in the policy sheet, or ask for less'
+          : `grant a ${coin.symbol} allowance on the policy's cap, or ask for less`),
     };
   }
   if ((intent.action === 'swap' || intent.action === 'deposit_liquidity') && amountMist <= 0n) {
@@ -376,21 +449,45 @@ actions: string[];
 }
 
 /** Map a validated intent onto the script that already proves the operation. */
-function planFor(intent: any, amountMist: bigint | null, hire: Hire) {
-  const sui = (Number(amountMist) / Number(SUI_MIST)).toFixed(4);
+function planFor(intent: any, amountMist: bigint | null, hire: Hire | null) {
   switch (intent.action) {
     case 'swap': {
+      // A swap escrows, so it has no plan without a hire. This guard used to live in `main`, where
+      // it refused EVERY action that had no grant — correct when a swap was the only action there
+      // was, and wrong for the one action that needs none. Only `planFor` knows which is which,
+      // so this is where the question belongs.
+      if (!hire) return null;
+      const name = `${intent.from}->${intent.to}` as Direction;
+      const d = DIRECTIONS[name];
+      // `validate` already refused anything outside the table, so this is the compiler being told
+      // what the control flow guarantees rather than a case the code can reach.
+      if (!d) return null;
+      // The amount, in the INPUT coin's decimals. A single `Number(amountMist) / 1e9` used to be
+      // computed here for every action, which printed a USDC amount as though it were SUI the
+      // moment a second direction existed.
+      const amountText = fromUnits(amountMist ?? 0n, d.in.decimals);
+      // THE VAULT PATH IS ONE DIRECTION. `src/swap.js` calls `swap_and_route`, which escrows
+      // nothing and knows SUI -> USDC. So a USDC -> SUI trade has NO command rather than a wrong
+      // one: the escrow is the only path that direction, and `actionFor` refuses a null command
+      // loudly instead of running a script that cannot do what was asked.
+      const vault = d.in.symbol === 'SUI';
       return {
-        command: 'node src/swap.js',
+        command: vault ? 'node src/swap.js' : null,
         env: {
-          SWAP_MIST: String(amountMist),
+          // In the INPUT coin's smallest unit. `SWAP_MIST` survives only where it is TRUE — the
+          // vault path, which is SUI in — because a name saying MIST while carrying USDC units is
+          // exactly the kind of lie this project keeps finding in its own comments.
+          SWAP_AMOUNT_IN: String(amountMist),
+          SWAP_DIRECTION: name,
+          ...(vault ? { SWAP_MIST: String(amountMist) } : {}),
           SWAP_POLICY_ID: hire.policyId,
           SWAP_POLICY_SHARED: String(hire.policySharedVersion),
           // The hire's own venue, not a global default.
           SWAP_POOL_ID: hire.venue.id,
           SWAP_POOL_SHARED: String(hire.venue.sharedVersion),
         },
-        summary: `swap ${sui} SUI -> USDC via the ${hire.name} hire on its ${hire.venue.feeBps / 100}% pool`,
+        summary: `swap ${amountText} ${d.in.symbol} -> ${d.out.symbol} via the ${hire.name} hire`
+          + ` on its ${hire.venue.feeBps / 100}% pool`,
       };
     }
     case 'deposit_liquidity':
@@ -410,6 +507,17 @@ function planFor(intent: any, amountMist: bigint | null, hire: Hire) {
         command: 'node src/redeem.js',
         env: {},
         summary: 'redeem the guarded position back to the owner',
+      };
+    // A READ. There is no script and no transaction, so the plan carries neither: it names what to
+    // ask for, and WHICH SERVER to ask is resolved from the installed talent in ui.ts — the one
+    // place that talks to a talent's server, the same as the fill notification.
+    case 'status':
+      return {
+        read: true,
+        // The OWNER is decided HERE, from the deployment's own addresses. The page never names an
+        // address, which is the same rule the swap path follows for amounts and venues.
+        query: { what: 'balances', owner: DEPLOYER },
+        summary: 'read the balances of the agent wallet from the query talent',
       };
     default:
       return null;
@@ -452,7 +560,7 @@ async function policyState(hire: Hire) {
  * and refused every chat-typed swap with "exceeds the vault balance 0" while the order
  * form worked fine — two paths, two funding requirements, and the gate only knew one.
  */
-async function walletBalanceMist() {
+async function walletBalanceMist(coinType: string = SUI_TYPE) {
   // A fixed balance, for the acceptance check ONLY.
   //
   // The gate's balance comparison is ADVISORY -- the chain enforces the real
@@ -461,6 +569,10 @@ async function walletBalanceMist() {
   // depend on the vault happening to be funded, and a check that goes red when the
   // state legitimately changes -- an owner withdrawing before an upgrade, say -- is a
   // check people learn to ignore.
+  //
+  // The override is in the coin being READ, not in MIST: a USDC order's balance is USDC units, and
+  // an injected figure that meant one coin while the code read the other would make the check pass
+  // for the wrong reason.
   const override = process.env.AGENT_WALLET_BALANCE_MIST;
   if (override !== undefined) return BigInt(override);
 
@@ -469,13 +581,11 @@ async function walletBalanceMist() {
     network: 'mainnet',
     baseUrl: 'https://fullnode.mainnet.sui.io:443',
   });
-  // Imported here rather than at the top, matching how this file already reaches
-  // addresses.js. Using a name that was never imported is what broke every real run
-  // while the test suite stayed green — the suite injects a balance, so this function
-  // returned early and the missing name was never evaluated.
-  const { DEPLOYER } = await import('./addresses.js');
+  // `DEPLOYER` is a TOP-LEVEL import now. It used to be reached from inside this function, and the
+  // bug that caused is the reason: a name that was only ever imported here broke every real run
+  // while the suite stayed green, because the suite injects a balance and this returned early.
   const sender = process.env.SUI_SENDER || DEPLOYER;
-  const b = await client.getBalance({ owner: sender, coinType: '0x2::sui::SUI' });
+  const b = await client.getBalance({ owner: sender, coinType });
   return BigInt(b.balance?.balance ?? 0);
 }
 
@@ -498,19 +608,18 @@ async function walletBalanceMist() {
  *
  * Exported because the build path needs the same figure. There is one reader of this ledger.
  */
-export async function allowanceMist(capId: string): Promise<bigint | null> {
+export async function allowanceMist(capId: string, coinType: string = SUI_TYPE): Promise<bigint | null> {
   // A fixed allowance, for the acceptance check ONLY — the same reasoning as the balance
   // override above. The chain enforces the real bound, so overriding it here can only make the
   // server's ADVICE wrong, never lose funds; and without it the check's cases depend on whatever
-  // the budget happens to be, which is a check people learn to ignore.
+  // the budget happens to be, which is a check people learn to ignore. In the coin being read.
   const override = process.env.AGENT_ALLOWANCE_MIST;
   if (override !== undefined) return BigInt(override);
 
   try {
     const { SuiGrpcClient } = await import('@mysten/sui/grpc');
     const { Transaction } = await import('@mysten/sui/transactions');
-    const { PACKAGE_LATEST_ID, VAULT_ID, VAULT_SHARED_VERSION, SUI_TYPE, DEPLOYER } =
-      await import('./addresses.js');
+    const { PACKAGE_LATEST_ID, VAULT_ID, VAULT_SHARED_VERSION } = await import('./addresses.js');
 
     const client = new SuiGrpcClient({
       network: 'mainnet',
@@ -521,7 +630,10 @@ export async function allowanceMist(capId: string): Promise<bigint | null> {
     tx.setSender(DEPLOYER);
     tx.moveCall({
       target: `${PACKAGE_LATEST_ID}::spend_vault::allowance`,
-      typeArguments: [SUI_TYPE],
+      // THE COIN MATTERS: the ledger holds one entry per coin type, so a USDC order's ceiling is a
+      // different entry from the SUI grant. Reading the SUI one for a USDC amount compares two
+      // different coins and would refuse or allow for a reason unrelated to the maker's budget.
+      typeArguments: [coinType],
       arguments: [
         tx.sharedObjectRef({
           objectId: VAULT_ID, initialSharedVersion: VAULT_SHARED_VERSION, mutable: false,
@@ -546,11 +658,6 @@ export async function allowanceMist(capId: string): Promise<bigint | null> {
   }
 }
 
-/** SUI for a human, from mist. Used in refusals, which quote real amounts. */
-function suiText(mist: bigint): string {
-  return (Number(mist) / 1e9).toString();
-}
-
 async function main() {
   const args = process.argv.slice(2);
   const execute = args.includes('--execute');
@@ -565,21 +672,38 @@ async function main() {
   const { actions: available } = describeTalents(installedIds);
   const validActions = available.map((a) => a.id);
   const { intent, finishReason } = await parseIntent(text, validActions);
-  const walletSuiMist = await walletBalanceMist();
+  // DOES THIS ACTION MOVE VALUE? Read from the installed talent, before anything is judged,
+  // because it decides whether a grant is involved at all.
+  //
+  // A read is what this exists for: no hire, no allowance, no venue and no suspension check,
+  // because none of those can be violated by looking at a number. A suspended hire can still read
+  // its own balance, and refusing that would be the gate confusing "may not spend" with "may not
+  // act".
+  const spends = actionSpends(installedIds, intent.action);
+  // WHICH COIN THE AMOUNT IS IN — and both reads below are PER COIN on chain, so a USDC amount
+  // compared against the SUI balance or the SUI ledger entry would be a unit error that refuses (or
+  // allows) for a reason unrelated to the maker's budget.
+  const inCoin = actionCoin(intent);
+  // Not read at all for a read: two chain reads whose result cannot change the verdict.
+  const walletBalanceIn = spends ? await walletBalanceMist(inCoin.type) : 0n;
 
-  // The model extracted a literal; the arithmetic is ours and exact.
-  const parsed = parseAmountText(intent.amountText);
+  // The model extracted a literal; the arithmetic is ours and exact — and in the INPUT COIN's
+  // decimals, which is the point: "0.05" is 50000 USDC units and 50000000 MIST.
+  const parsed = parseAmount(intent.amountText, inCoin.decimals);
   const amountMist = parsed.ok ? parsed.amountMist : null;
   // Which hire applies is decided from the request text, not from the model's
   // opinion. See selectHire.
   const hirePick = selectHire(text);
   // `?? null` because the pick's return type has `hire` optional — it is absent on the refusal
   // branch — so a caller reading it gets `Hire | undefined` rather than `Hire | null`.
-  const hire = hirePick.ok ? (hirePick.hire ?? null) : null;
+  //
+  // And null for a READ, which is the honest report: a read is not routed through a hire, no
+  // grant is consulted, and saying which hire it went through would imply one was.
+  const hire = spends && hirePick.ok ? (hirePick.hire ?? null) : null;
   const policy = hire ? await policyState(hire) : null;
   // Read after `hire` is known, because the ledger is keyed by the cap and the cap is the hire's.
   // Null on failure, and the gate stands aside for null — see the refusal for why.
-  const allowance = hire ? await allowanceMist(hire.capId) : null;
+  const allowance = hire ? await allowanceMist(hire.capId, inCoin.type) : null;
 
   let verdict;
   if (!hirePick.ok) {
@@ -594,7 +718,7 @@ async function main() {
     verdict = { ok: false, reason: parsed.reason };
   } else {
       verdict = validate(intent, amountMist ?? null, {
-        walletSuiMist, allowance, text, hire, policy, actions: validActions,
+        walletBalanceIn, allowance, text, hire, policy, actions: validActions, spends,
       });
   }
 
@@ -628,9 +752,13 @@ async function main() {
       groundedInRequest: intent.agent ? grounded(text, intent.agent) : false,
       consulted: false,
     },
-    amountMist: amountMist == null ? null : amountMist.toString(),
-    walletBalanceMist: walletSuiMist.toString(),
-    allowanceMist: allowance === null ? null : allowance.toString(),
+    // EVERY MONEY FIGURE IS IN `inCoin`'s SMALLEST UNIT, and the coin says which. The keys used to
+    // say MIST and mean it, for the one coin there was; a request can now be denominated in USDC,
+    // so the unit is data rather than part of a name.
+    inCoin: { symbol: inCoin.symbol, decimals: inCoin.decimals },
+    amount: amountMist == null ? null : amountMist.toString(),
+    walletBalance: walletBalanceIn.toString(),
+    allowance: allowance === null ? null : allowance.toString(),
     validation: verdict,
   };
 
@@ -658,18 +786,21 @@ async function main() {
     process.exit(asking ? 0 : 1);
   }
 
-    // The verdict above already refused a null hire, so this is the compiler needing to be told
-    // what the control flow guarantees rather than a case the code can reach.
-    if (!hire) {
-      console.log(JSON.stringify({ ...report, decision: 'REFUSED', reason: 'no hire' }, null, 2));
+    // PLANNING COMES FIRST, and a null hire is no longer a refusal by itself: a read has no hire
+    // and is still plannable. `planFor` is what knows which actions need one — the guard that
+    // used to sit here refused every action without a grant, which is now wrong for exactly one
+    // of them.
+    const plan = planFor(intent, amountMist ?? null, hire);
+    if (!plan) {
+      console.log(JSON.stringify({
+        ...report,
+        decision: 'REFUSED',
+        // `no hire` when a grant was the missing piece, `no plan` when the action itself has no
+        // route. The two read very differently to whoever sees them.
+        reason: hire ? 'no plan' : 'no hire',
+      }, null, 2));
       process.exit(1);
     }
-    const plan = planFor(intent, amountMist ?? null, hire);
-
-  if (!plan) {
-    console.log(JSON.stringify({ ...report, decision: 'REFUSED', reason: 'no plan' }, null, 2));
-    process.exit(1);
-  }
 
   console.log(JSON.stringify({ ...report, decision: 'PROPOSED', plan }, null, 2));
 

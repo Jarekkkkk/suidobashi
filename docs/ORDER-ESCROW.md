@@ -71,8 +71,13 @@ So the **storage rebate** can be reclaimed separately. Measured on chain:
 ```text
 a minimal transaction          ~0.00024 SUI   (the failed ENotAgent tx)
 an object's storage rebate     ~0.0044 SUI    (burn 5gko7Lna…: net +0.0041 after gas)
-a settlement's gas             ~0.0043 SUI
+a settlement's gas             ~0.00557 SUI   (MEASURED from a real fill)
 ```
+
+**That last figure was 0.0043 here for a while, and it was an ESTIMATE.** The filler's minimum fee
+was then set from it, and 0.005 against a real cost of 0.00557 is a floor below cost — which looks
+like a policy and behaves like a subsidy. The measured number is the one that belongs in a
+sentence that says "measured".
 
 A second burn measured 0.004198392 SUI of rebate against 0.0001 of computation — net
 **+0.004098392**. So the rebate runs 0.0042–0.0044 depending on the order, and both figures
@@ -102,6 +107,41 @@ Two consequences that are not optional:
   `object::new`. So `settle` splits the whole balance out of the intact struct,
   leaving the original at zero.
 
+## Vault-funded commitments — in source, NOT yet published
+
+The escrow does not have to be the maker's wallet. `create_from_vault` commits the **vault's** funds
+and holds nothing itself, so the settlement draw is what DECREMENTS the allowance — and that is the
+only thing that makes the budget a spending total rather than a per-order ceiling.
+
+```text
+create_from_vault     owner-gated by the OwnerCap; checks the allowance; escrows NOTHING
+                      destination is the POLICY's — there is no parameter for it
+settle_from_vault_*   draw via policy::spend_balance_from_vault (this decrements), then run the
+                      SAME settle_a2b / settle_b2a a wallet order uses
+                      inherits !suspended, which the wallet path cannot see
+```
+
+### Draw at settlement, not at creation
+
+`spend_vault` has no credit-back: `set_allowance` is owner-gated and `spend` only debits. So an order
+that drew at creation could not return its budget on expiry — and with a one-minute window expiry is
+the common case. Drawing at settlement makes an expired commitment cost nothing but the storage of
+an empty object.
+
+**The cost, stated plainly: the ceiling is NOT reserved.** The allowance is checked at create as a
+courtesy and checked again for real by `spend` at settlement, so committing more than the remaining
+budget gets the first settlement and not the second. A reservation needs the credit-back that does
+not exist.
+
+### Two gates that only exist on this path
+
+- **The OwnerCap**, because this commits the owner's money. Without it any address could burn the
+owner's budget on trades they never asked for. Nothing could be STOLEN — every settlement pays the
+policy's destination — but a griefing vector is not a safe default.
+- **`!suspended`**, inherited from `assert_agent_gates`. NOTES records that a suspended hire can
+still fill a WALLET-escrowed order, because `order.move` never reads `is_suspended`. This path cannot
+spend from a suspended grant.
+
 ## What settle asserts
 
 ```text
@@ -127,6 +167,7 @@ mistake as the venue allowlist, one layer down.
 | default window | **1 minute** | a swap order is a short-lived intent, not a standing offer. No lower bound in the contract, so it can go shorter |
 | storage rebate | **the maker**, via a separate burn | the rebate goes to whoever signs, and it is the maker's storage |
 | destination | fixed at create | the settler cannot redirect value, same rule as the policy |
+| which direction | **either**, read off the order | `settle_a2b`/`settle_b2a` are two entry points because Move is statically typed and cannot infer which side of the pool an order holds. The FILLER reads that from the order's own object type, so one server settles both ways — and the coin type is not in the order's `json`, only in its type string |
 | policy dependency | agent gate + pool allowlist only | the order names its own pool, minimum and expiry |
 
 ## What this retires

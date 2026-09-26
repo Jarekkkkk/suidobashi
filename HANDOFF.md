@@ -36,16 +36,23 @@ deployer / owner    0x0b3fc768f8bb3c772321e3e7781cac4a45585b4bc64043686beb634d65
 USDC type           0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC
 ```text
 
-**Three processes must be running.** The UI is useless without the first.
+**Four processes must be running.** The UI is useless without the first, and a talent whose server
+is down refuses rather than guesses.
 
 ```bash
 qvac serve openai              # the local model, port 11434
 bun src/ui.ts                  # the app, 127.0.0.1:8788, token rotates each start
 bun src/mcp-server.ts          # the reference filler, 127.0.0.1:8790
+bun src/query-server.ts        # the read-only data server, 127.0.0.1:8791
 ```text
 
-`bun run verify` runs one tsc pass and four check suites. **Run it as its own step** — batching it
+`bun run verify` runs one tsc pass and five check suites — `verify-intent`, `verify-page`,
+`verify-guard`, `verify-order`, `verify-query`. **Run it as its own step** — batching it
 with `git commit` has shipped a red verify twice.
+
+Note the shape, because a single "/N passed" is not what this prints: three suites report their own
+totals (21, 9 and 22 as of the query talent) and two report only `all checks passed`. A green run is
+`exit 0` with no `FAIL` line, not one number.
 
 ---
 
@@ -61,6 +68,13 @@ storage rebate             measured: 0.004198392 SUI net from a burn
 the allowance bound        v8: 0.01 against a 0.01 grant passes, 0.02 aborts
                            and live: 0.06 refused against 0.05, then 0.05 escrowed,
                            filled (58691 out, 50000000 in), reclaimed
+the read path              "check my balances" -> ANSWERED, chain-sourced, the agent
+                           wallet's SUI and USDC. THE ONE CLAIM HERE WITH NO
+                           TRANSACTION BEHIND IT, and that is the point: a read
+                           moves nothing, so there is no digest to name. What
+                           proves it instead is that the gate reports `hire: null`
+                           (no grant consulted) and that removing the talent makes
+                           the same request refuse.
 ```text
 
 **The full loop, once, in the user's own words:**
@@ -87,6 +101,8 @@ talent     how the agent reaches a SERVER, one to one. `swap` is a talent; its s
 
 grant      an on-chain permission. A talent that spends needs one; a talent that only reads
            does not. Installing is off-chain; a grant is on-chain — a download vs a permission.
+           WHICH OF THE TWO IS NOW DECLARED BY THE TALENT (`spends` on the action) and read by
+           the gate before it judges anything, so a read is never asked to name a hire.
 
 order      what a swap actually creates. It ESCROWS from the maker's wallet, holds min_out (what
            the maker receives), carries the filler's fee inside it, and expires in one minute.
@@ -113,20 +129,82 @@ where funds live, not a check added somewhere.
 
 ## 4. Open work, ranked
 
-**1. The query talent.** Balances and object lookup. The first capability that does not move value,
-the first that would pay for data rather than trade, and the first genuinely **remote** talent —
-which is the case the 1-to-1 model was built for and has not been exercised. **x402 belongs here**,
-on a non-fill route. It must never charge for a fill.
+**1. The query talent — LANDED.** Balances and object lookup, the first capability that does not
+move value, the first that would pay for data rather than trade, and the first genuinely **remote**
+talent — the case the 1-to-1 model was built for. `src/query-server.ts` is the server (read-only,
+holds no key, no fill route); the client's half is the `status` action and the gate's `spends`
+branch. **What is NOT done: x402 settlement.** The price seam is in the server and deliberately off,
+so nothing advertises a price that cannot be paid — turn it on when a client can draw from the
+vault to pay one.
 
-**2. USDC → SUI.** The contract path exists (`settle_a2b`) and nothing calls it. Needs an order
-escrowing USDC and a filler settling the other direction. The talent's title was corrected once
-already for promising this direction while nothing implemented it.
+**2. USDC → SUI — LANDED**, with one OWNER action outstanding.
 
-**3. Move the escrow into the vault.** The only way the budget becomes a true spending total. Big:
-it changes where the funds live, and `settle`/`refund` would have to return them to the vault.
+The direction is executable end to end now: `DIRECTIONS` in `src/addresses.ts` is the single table
+(the input coin, the output coin, and which settle entry point), the escrow takes its coin from it,
+the gate accepts both directions, and ONE filler picks `settle_a2b` or `settle_b2a` by reading the
+coin off the order's own object type. The talent's title offers both, which it now does.
 
-**4. Delete the old page at `/`.** The app at `/app` now covers swap, orders, and every policy
-boundary. Nothing in `/` is unreachable from `/app`. Mostly a deletion.
+**What blocked a real trade, and it was never the direction:** the policy's cap held no USDC
+allowance, so `create_with_policy` aborted `EExceedsAllowance` — verified by building the escrow
+against mainnet, where the PTB resolved a real USDC coin and reached that assert.
+
+**FIXED, and this is the fix that matters for that item:** the budget path is PER COIN now (`COINS`
+in `addresses.ts`, threaded sheet → route → script), so a USDC ceiling can be granted at all. A 0.5
+USDC grant **builds and simulates**; it still needs ONE signature from you in the policy sheet before
+a USDC order can settle, because the app can build a grant and only the wallet can sign it.
+
+**Also fixed, found in the same test:** the refusal for a trade too small to pay the filler's fee was
+unreadable — it listed three possible causes and named no figure, so "the trade is below the filler's
+minimum" looked like a broken aggregator. It now names the fee, what the maker would receive, and the
+input that would actually work, derived from the live quote.
+
+**Also fixed, found in the same test:** the FILLER's price limit sat on the wrong side for `a2b`.
+`flash_swap_internal` aborts with `EWrongSqrtPriceLimit` (code 11) unless the limit is BELOW the
+current price when selling A — the filler sent `current * 1.01` unconditionally, which is the `b2a`
+form, so every USDC -> SUI order died in the pool and expired. The sign is now `DIRECTIONS.limitSign`,
+beside the settle entry point. Our own `assert_within_bps` is symmetric and could never have caught it.
+
+**And the fee default is unchanged, and must stay so.** `MCP_MIN_FEE_OUT` is an ABSOLUTE 0.01 USDC and
+the reference filler refuses anything below it, so a fee that scales down with the trade merely
+escrows money nobody takes. The minimum TRADE SIZE that follows is real. `NOTES.md` has the whole correction,
+including the proportional-fee fix I made first and had to undo.
+
+**Deliberately NOT invented here:** whether a USDC budget should require the VAULT to hold USDC.
+The budget script enforces that for SUI and it is the right guard for the vault path — but the
+escrow path draws from the maker's WALLET, so for an order it is a precondition nothing needs.
+Resolving that is a design decision, not a mechanical change.
+
+**3. Move the escrow into the vault — IN SOURCE, STAGED, NOT PUBLISHED.** The only way the budget
+becomes a true spending total, and it is written and unit-tested. `policy::spend_balance_from_vault`
+is the primitive that was missing (the vault path could spend and not enforce a floor; the order path
+could enforce a floor and not spend), and `order::create_from_vault` +
+`settle_from_vault_a2b`/`_b2a` make the escrow the VAULT's instead of the wallet's.
+
+**THE DESIGN DIFFERS from the one line this file used to carry, and the difference matters.** The
+draw happens at SETTLEMENT, not at creation: `spend_vault` has no credit-back — `set_allowance` is
+owner-gated and `spend` only debits — so an order that drew at creation and then expired could never
+return the budget it took, and with a 60-second window expiry is routine rather than an edge. The
+cost of that choice, stated plainly: the ceiling is NOT reserved, so a maker who commits more than
+the remaining budget gets the first settlement and not the second. Read `create_from_vault`'s own
+note before publishing.
+
+**NOTHING IS WIRED TO IT, deliberately.** No script, no gate branch, no UI — a caller cannot name a
+package id that does not exist, and this project does not export earlier ids. Publishing is
+**version 9**, roughly 0.1 SUI, with the UpgradeCap in the deployer wallet. Trigger to publish: any
+other Move change to batch with it, or the decision that the budget should bound total spend.
+`bun run test` → 61 passing, 6 of them new.
+
+**4. Delete the old page at `/` — DONE.** `/` and its four modules are gone (`page.js`, `markup.js`,
+`/units.js`, `/events.js`); all five answer 404 and `/app` is unaffected. **Its premise was false when
+it was written**, and that is worth keeping rather than tidying away: "Nothing in `/` is unreachable
+from `/app`" was not true. Seven operations had no control in `/app` at all — **`topup`, `withdraw`,
+`position`, `deposit`, `rebalance`, `redeem`, `repoint`** — and `ActionForm.tsx`, whose own comment
+says "one pattern, ten uses", was written for exactly those and is still never rendered.
+
+What the deletion actually removed was their **UI**, not the capability: every one of them still has
+an `--emit-bytes` script and the documented `execute-signed-tx` submission path, so an operator can
+still do all seven by hand. The pressing two are `topup` and `withdraw` — the vault is the custody
+pot, and there is now no way to put money in or take it out from a page.
 
 **5. On-chain registry** — Walrus + SuiNS, so a talent can be discovered rather than pasted.
 
@@ -176,6 +254,8 @@ docs/MCP-STANDARD.md      the filler protocol. PREDATES the talent vocabulary an
 docs/ROADMAP.md           where this is going
 src/web/events.ts         the event vocabulary. An unclassified kind is VISIBLE by design.
 src/db.ts                 chats, messages, talents. Chain state is never cached.
+src/query-server.ts       the read-only reference server. Holds no key by design.
+src/verify-query.js       the read path's acceptance check, incl. the grant boundary.
 ```text
 
 **Mempal** holds the reasoning, in wing `sui-tokyo`. Query it before assuming — several drawers

@@ -32,14 +32,15 @@ import http from 'node:http';
 import {
   PACKAGE_LATEST_ID, POLICY_ID, POLICY_SHARED_VERSION, POOL_ID, POOL_SHARED_VERSION,
   GLOBAL_CONFIG_ID, GLOBAL_CONFIG_SHARED_VERSION, CLOCK_ID, CLOCK_SHARED_VERSION,
-  USDC_TYPE, SUI_TYPE, SLIPPAGE_BPS,
+  POOL_TYPE_ARGS, DIRECTIONS, SLIPPAGE_BPS,
+  directionForCoinType, orderCoinType, type Direction,
 } from './addresses.js';
 
 const PORT = Number(process.env.MCP_PORT ?? 8790);
 const HOST = process.env.MCP_HOST ?? '127.0.0.1';
 
 /**
- * The least fee this server will bother filling for, in the output coin's units.
+ * The least fee this server will bother filling for, PER OUTPUT COIN.
  *
  * The server's own policy, separate from any maker's default — the maker's UI default
  * is what they OFFER, this is what the server ACCEPTS. Conflating them would put the
@@ -49,8 +50,20 @@ const HOST = process.env.MCP_HOST ?? '127.0.0.1';
  * SUI of gas (~$0.0064), so the previous 0.005 floor accepted fills that lost money.
  * A floor below cost is worse than no floor — it looks like a policy and behaves like
  * a subsidy.
+ *
+ * A MAP RATHER THAN ONE NUMBER, because the fee is denominated in the OUTPUT coin and there are
+ * two outputs now: a USDC order pays in USDC, a SUI order in SUI. A single figure would have been
+ * read as USDC units against a SUI-denominated fee — 0.01 SUI against a floor of 10000, which is
+ * 0.00001 SUI, so the floor would have stopped existing. The SUI floor is 0.01 SUI, which is the
+ * same 1.8x margin over gas as the USDC one, and needs no conversion to pay that gas.
+ *
+ * A coin with no entry here is REFUSED rather than defaulted: an unknown output is not a cheap
+ * fill, it is one this server has no cost model for.
  */
-const MIN_FEE_OUT = BigInt(process.env.MCP_MIN_FEE_OUT ?? '10000');
+const MIN_FEE_OUT: Record<string, bigint> = {
+  USDC: BigInt(process.env.MCP_MIN_FEE_OUT ?? '10000'),      // 0.01 USDC
+  SUI: BigInt(process.env.MCP_MIN_FEE_SUI ?? '10000000'),    // 0.01 SUI
+};
 
 // Typed explicitly: inferred from a dynamic import inside a function, it is `any` in some
 // locations and unresolvable in others — which is exactly what the compiler said.
@@ -96,7 +109,28 @@ async function readFee(orderId: string) {
 }
 
 /** Read an order and decide whether this server will fill it. */
-async function inspect(orderId: string) {
+/**
+ * The result of inspecting an order.
+ *
+ * TYPED EXPLICITLY, and not for tidiness: an object literal's `ok: true` WIDENS to `boolean`, so
+ * without this the two branches are not a discriminated union and `seen.dir` reads as "possibly
+ * undefined" in the success branch. That is the compiler saying it cannot tell the outcomes apart,
+ * and it is right — `dir` genuinely does not exist on the refusal branch.
+ */
+type Inspection =
+  | { ok: false; why: string; fee?: string }
+  | {
+      ok: true;
+      order: any;
+      sharedVersion: unknown;
+      fee: bigint;
+      minOut: bigint;
+      funds: bigint;
+      direction: Direction;
+      dir: (typeof DIRECTIONS)[Direction];
+    };
+
+async function inspect(orderId: string): Promise<Inspection> {
   const c = await getClient();
   let obj;
   try {
@@ -111,6 +145,25 @@ async function inspect(orderId: string) {
   const sharedVersion = o.owner?.Shared?.initialSharedVersion;
   if (!sharedVersion) return { ok: false, why: 'order is not shared' };
 
+  // WHICH SIDE OF THE POOL, read from the object's own type — because the coin an order escrows is
+  // NOT in its `json`. `funds` is a `Balance<T>` and the field is a plain number, so the type
+  // argument is the only place the coin appears. This is what lets one filler settle both
+  // directions instead of being told which one to expect.
+  const coin = orderCoinType(o.type);
+  const direction = coin ? directionForCoinType(coin) : null;
+  if (!direction) {
+    return {
+      ok: false,
+      why: `${orderId} escrows ${coin ?? 'nothing this server recognises'}, `
+        + 'which this server cannot settle',
+    };
+  }
+  const dir = DIRECTIONS[direction];
+  const floor = MIN_FEE_OUT[dir.out.symbol];
+  if (floor === undefined) {
+    return { ok: false, why: `no cost model for a ${dir.out.symbol} fill` };
+  }
+
   const fee = await readFee(orderId);
   const expiresAtMs = Number(order.expires_at_ms ?? 0);
   const funds = BigInt(order.funds ?? 0);
@@ -120,14 +173,14 @@ async function inspect(orderId: string) {
   // worth it. Each returns before the next so the reason names the real blocker.
   if (funds === 0n) return { ok: false, why: 'order is empty — already settled or refunded' };
   if (Date.now() >= expiresAtMs) return { ok: false, why: 'order has expired' };
-  if (fee < MIN_FEE_OUT) {
+  if (fee < floor) {
     return {
       ok: false,
-      why: `fee ${fee} is below this server's minimum ${MIN_FEE_OUT}`,
+      why: `fee ${fee} ${dir.out.symbol} is below this server's minimum ${floor} ${dir.out.symbol}`,
       fee: fee.toString(),
     };
   }
-  return { ok: true, order, sharedVersion, fee, minOut, funds };
+  return { ok: true, order, sharedVersion, fee, minOut, funds, direction, dir };
 }
 
 /**
@@ -190,18 +243,30 @@ async function fill(orderId: string) {
   const sqrtNow = BigInt(String((poolObj.object ?? poolObj).json?.current_sqrt_price ?? 0));
   if (sqrtNow === 0n) return { filled: false, why: 'cannot read the pool price' };
 
+  // THE LIMIT SITS ON THE SIDE THE SWAP IS HEADING — `DIRECTIONS.limitSign`, read off the order's
+  // own coin. Selling A pushes the pool price down (a2b) and selling B pushes it up (b2a); a limit
+  // on the wrong side is already crossed when the swap starts, so the pool aborts in
+  // `flash_swap_internal` and the order never fills. This expression was `10_000n + SLIPPAGE_BPS`
+  // unconditionally: right for b2a, which is the direction this server was written for, and the
+  // reason every USDC -> SUI order expired unfilled while SUI -> USDC filled.
+  const sqrtPriceLimit =
+    (sqrtNow * (10_000n + BigInt(seen.dir.limitSign) * SLIPPAGE_BPS)) / 10_000n;
+
   const tx = new Transaction();
   tx.setSender(agent);
   tx.moveCall({
-    // SUI in, USDC out: SUI is side B of Pool<USDC, SUI>.
-    target: `${PACKAGE_LATEST_ID}::order::settle_b2a`,
-    typeArguments: [USDC_TYPE, SUI_TYPE],
+    // THE ENTRY POINT IS A PROPERTY OF THE DIRECTION, and the direction came off the order's own
+    // type. `settle_a2b` fills an order holding side A, `settle_b2a` one holding side B — both take
+    // the same `<A, B>` because the POOL fixes those, and both enforce the maker's floor the same
+    // way. Move is statically typed and cannot infer the side, which is why there are two.
+    target: `${PACKAGE_LATEST_ID}::order::${seen.dir.settle}`,
+    typeArguments: [...POOL_TYPE_ARGS],
     arguments: [
       tx.sharedObjectRef({ objectId: POLICY_ID, initialSharedVersion: POLICY_SHARED_VERSION, mutable: false }),
       tx.sharedObjectRef({ objectId: orderId, initialSharedVersion: Number(seen.sharedVersion), mutable: true }),
       tx.sharedObjectRef({ objectId: GLOBAL_CONFIG_ID, initialSharedVersion: GLOBAL_CONFIG_SHARED_VERSION, mutable: false }),
       tx.sharedObjectRef({ objectId: POOL_ID, initialSharedVersion: POOL_SHARED_VERSION, mutable: true }),
-      tx.pure.u128((sqrtNow * (10_000n + SLIPPAGE_BPS)) / 10_000n),
+      tx.pure.u128(sqrtPriceLimit),
       tx.sharedObjectRef({ objectId: CLOCK_ID, initialSharedVersion: CLOCK_SHARED_VERSION, mutable: false }),
     ],
   });
@@ -226,7 +291,9 @@ async function fill(orderId: string) {
     filled: result.status?.success === true,
     digest: result.digest ?? null,
     status: result.status ?? null,
+    direction: seen.direction,
     fee: String(seen.fee ?? 0n),
+    feeAsset: seen.dir.out.symbol,
     minOut: String(seen.minOut ?? 0n),
   };
 }
@@ -247,11 +314,13 @@ const server = http.createServer((req, res) => {
         id: 'fill',
         title: 'Fill an escrowed swap order',
         description: 'Swaps the funds an order escrows, delivers at least the maker\'s '
-          + 'minimum, and collects the fee the order declares.',
+          + 'minimum, and collects the fee the order declares. BOTH DIRECTIONS: which side of the '
+          + 'pool the order holds is read from the order object itself.',
         // The terms a maker is agreeing to when they declare a fee.
         terms: {
-          minFeeOut: MIN_FEE_OUT.toString(),
-          feeAsset: 'USDC',
+          minFeeOut: Object.fromEntries(Object.entries(MIN_FEE_OUT).map(([k, v]) => [k, v.toString()])),
+          feeAsset: 'the output coin — USDC for a SUI order, SUI for a USDC one',
+          directions: Object.keys(DIRECTIONS),
           window: 'fills must be requested before the order expires, which defaults to 60s',
         },
       }],
@@ -287,7 +356,8 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`mcp server on http://${HOST}:${PORT}`);
-  console.log(`  min fee ${MIN_FEE_OUT} (output coin units) · fills orders on request`);
+  const floors = Object.entries(MIN_FEE_OUT).map(([k, v]) => `${v} ${k}`).join(', ');
+  console.log(`  min fee ${floors} · fills orders on request, either direction`);
   console.log(`  signing as the policy agent · key from AGENT_SECRET_KEY`);
   console.log(`  the fill is paid by the fee inside the order, not by x402`);
 });

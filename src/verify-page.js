@@ -1,16 +1,18 @@
 /*
- * One runnable check for the page: escaping, amount parsing, and element bindings.
+ * One runnable check for the shared web layer: amount parsing, the event vocabulary, and the source
+ * relationships the served app depends on.
  *
- * src/web/markup.js is security relevant: values arriving from the chain and from
- * hire names are interpolated into markup, so if `html` ever stops escaping, or
- * `setHtml` ever stops escaping raw input, those values become script injection.
- * src/web/units.js decides the integer a transaction carries. Both are imported
- * rather than duplicated, so what is tested is what the browser is served.
+ * IT USED TO COVER THE OLD PAGE AS WELL — its escaping module (`src/web/markup.js`), the elements it
+ * looked up by id, and the markup it found them in. All three went with the page: the React app is
+ * bundled, so it neither fetches `markup.js` nor looks anything up by id, and a check for a deleted
+ * module is not a check. The name stays because the app is a served page too.
+ *
+ * src/web/units.ts decides the integer a transaction carries, which is why it is imported here
+ * rather than duplicated: what is tested is what the app and the CLI scripts both use.
  *
  *   bun run src/verify-page.js
  */
 import fs from 'node:fs';
-import { esc, html, setHtml } from './web/markup.js';
 import { suiToMist, toUnits, usdcToUnits } from './web/units.ts';
 import { EVENT_KINDS, SOURCES, TERMINAL_KINDS, event, endingFor } from './web/events.ts';
 
@@ -21,59 +23,7 @@ const check = (name, cond, detail = '') => {
   console.error(`FAIL: ${name}${detail ? ` — ${detail}` : ''}`);
 };
 
-const ATTACK = '<img src=x onerror="alert(1)">';
-
-// 1. A raw value interpolated into a template is escaped.
-const one = html`<b>${ATTACK}</b>`;
-check('html escapes an interpolated value', !one.includes('<img'), one);
-check('html keeps the surrounding markup', one.includes('<b>') && one.includes('</b>'), one);
-check('html escapes the angle brackets', one.includes('&lt;img'), one);
-
-// 2. A nested template is NOT double escaped — the markup it produced survives.
-const inner = html`<i>${ATTACK}</i>`;
-const outer = html`<div>${inner}</div>`;
-check('nested html keeps its markup', outer.includes('<i>') && outer.includes('</i>'), outer);
-check('nested html does not double escape', !outer.includes('&amp;lt;'), outer);
-check('nested html still escapes the payload',
-  !outer.includes('<img') && outer.includes('&lt;img'), outer);
-
-// 3. setHtml escapes a plain string, so a raw caller cannot inject either.
-const el = { innerHTML: null };
-setHtml(el, ATTACK);
-check('setHtml escapes a raw string', !String(el.innerHTML).includes('<img'), String(el.innerHTML));
-
-// 4. setHtml passes through markup produced by html, with the payload still escaped.
-const el2 = { innerHTML: null };
-setHtml(el2, html`<b>${ATTACK}</b>`);
-check('setHtml keeps html-produced markup', String(el2.innerHTML).includes('<b>'), String(el2.innerHTML));
-check('setHtml keeps the payload escaped', !String(el2.innerHTML).includes('<img'), String(el2.innerHTML));
-
-// 5. Quotes are escaped, which is what makes attribute position safe.
-const attr = html`<span title="${'" onmouseover="alert(1)'}">x</span>`;
-check('quotes are escaped in attribute position', !attr.includes('onmouseover="'), attr);
-check('quotes become entities', attr.includes('&quot;'), attr);
-
-// 6. The values actually rendered by the page: a hire name from our own config and
-//    a digest from the chain. Neither should be able to open a tag.
-const chainish = html`<a href="https://suiscan.xyz/mainnet/tx/${'0x' + '" onmouseover="x'}">x</a>`;
-check('a digest position cannot break out of the href', !chainish.includes('" onmouseover'), chainish);
-
-// 7. The case that caught a real bug in this module: rendering a list maps the
-//    template over it. Fragments must join with nothing. A marker object
-//    stringifies to "[object Object]", and a naive join inserts commas — either
-//    way the hires strip and the hire dropdowns render garbage.
-const mapped = ['alpha', 'beta'].map((name) => html`<option>${name}</option>`);
-const joined = html`<select>${mapped}</select>`;
-check('a mapped list renders every fragment',
-  joined.includes('<option>alpha</option>') && joined.includes('<option>beta</option>'), joined);
-check('a mapped list joins with no separator',
-  !joined.includes(',') && !joined.includes('[object'), joined);
-check('an empty list renders nothing', html`<select>${[]}</select>`.includes('<select></select>'),
-  String(html`<select>${[]}</select>`));
-check('esc flattens a list of mixed values',
-  esc([html`<b>x</b>`, 'raw<']).startsWith('<b>x</b>'), String(esc([html`<b>x</b>`, 'raw<'])));
-
-// 8. Amount conversion. This is the piece that broke silently when the page lived in
+// 1. Amount conversion. This is the piece that broke silently when the page lived in
 //    a template literal (the backslash in its regex was eaten, so every valid amount
 //    returned null and the buttons looked dead). It is also the piece that decides
 //    what integer a transaction carries, so it gets real cases.
@@ -115,27 +65,7 @@ check('6 and 9 decimals are not interchangeable', usdcToUnits('0.5') !== suiToMi
 check('toUnits honours its decimals argument', toUnits('1', 2) === '100' && toUnits('1', 0) === '1',
   `${toUnits('1', 2)} / ${toUnits('1', 0)}`);
 
-// 9. Element bindings. page.js looks elements up by id; ui.js's template creates
-//    them. A mismatch yields null, and a null at module load THROWS -- so no handler
-//    attaches anywhere and every button on the page does nothing. That is exactly how
-//    this project's first bug presented itself, and nothing else checks for it.
-const uiSource = fs.readFileSync('src/ui.ts', 'utf8');
-const pageSource = fs.readFileSync('src/web/page.js', 'utf8');
-
-const declared = new Set([
-  // ids in the served page template
-  ...[...uiSource.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]),
-  // ids page.js creates itself, e.g. the wallet connect/disconnect buttons
-  ...[...pageSource.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]),
-]);
-const looked = [...pageSource.matchAll(/\$\('([^']+)'\)/g)].map((m) => m[1]);
-const missing = [...new Set(looked)].filter((id) => !declared.has(id));
-
-check('every element the page looks up exists in the markup', missing.length === 0,
-  `nothing declares id="${missing.join('", nothing declares id="')}"`);
-check('the check found bindings to verify', looked.length >= 8, `found ${looked.length}`);
-
-// 10. The pipeline's event vocabulary. Two things here are load-bearing rather than
+// 2. The pipeline's event vocabulary. Two things here are load-bearing rather than
 //     cosmetic: a typo must fail at the point it is written instead of reaching a
 //     browser that does not know how to render it, and the wording of the states a flow
 //     ENDS in must not describe a working outcome as a failure.
@@ -361,21 +291,28 @@ for (const token of ['--background', '--foreground', '--sidebar', '--card', '--b
   // FAIL on correct code, which is the same class of mistake as the substring check earlier.
   const fn = ui;
 
-  // ONE READER, and it lives in agent.ts.
+  // ONE READER, and it lives in agent.ts. COUNTED rather than merely present: "exactly one" is the
+  // claim in the label, and two readers of one ledger would drift.
   //
-  // The check used to look for `spend_vault::allowance` inside ui.ts, which was where the read
-  // first lived. Moving it so the GATE could use it too made that check fail on correct code —
-  // the fourth time a check has described a shape rather than an invariant. What matters is that
-  // there is exactly one reader and both callers use it, so that is what this asserts.
+  // COMMENT LINES ARE STRIPPED FIRST. The string also appears in the doc comment that explains why
+  // the read is a simulate rather than a getObject, so counting raw occurrences reported a second
+  // reader that does not exist — a check that counts prose measures the prose.
   const agentSrc = fs.readFileSync('src/agent.ts', 'utf8');
+  const agentCode = agentSrc.split('\n')
+    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  const ledgerReads = (agentCode.match(/spend_vault::allowance/g) ?? []).length;
   check('the allowance is read by exactly one function, in agent.ts',
-    agentSrc.includes('export async function allowanceMist') && agentSrc.includes('spend_vault::allowance'),
-    'the ledger reader moved or disappeared — the gate and the hires route both depend on it');
+    agentSrc.includes('export async function allowanceMist') && ledgerReads === 1,
+    `spend_vault::allowance appears ${ledgerReads} time(s) in code — the gate and the hires route both depend on it`);
   check('the hires route uses that reader rather than its own copy',
     fn.includes("import { allowanceMist } from './agent.js'") && fn.includes('allowanceMist(h.capId)'),
     'a second copy of the read — two readers of one ledger will drift');
+  // THE ARGUMENT LIST IS DELIBERATELY NOT PINNED. A coin type was added to this call when a second
+  // direction arrived, and a check naming the old shape failed on correct code — the fifth time
+  // this project has paid for asserting a shape instead of an invariant. ONE READER is the
+  // invariant; which arguments it takes is not.
   check('the gate reads the allowance too',
-    agentSrc.includes('await allowanceMist(hire.capId)'),
+    /await allowanceMist\(hire\.capId[^)]*\)/.test(agentSrc),
     'the gate does not read it, so an over-grant request would only fail on chain, as an abort');
   check('the ledger value overwrites the registry figure',
     /row\.budgetSui = \(Number\(mist\) \/ 1e9\)/.test(fn),
@@ -423,6 +360,55 @@ for (const token of ['--background', '--foreground', '--sidebar', '--card', '--b
     'the settler gate is gone');
   check('order.move still gates on the pool allowlist', /is_pool_allowed/.test(order),
     'the venue gate is gone');
+}
+
+// THE BUDGET IS PER COIN, AND THE COIN HAS TO SURVIVE THE WHOLE HOP.
+//
+// `set_allowance` is keyed by (cap_id, coin_type), so a SUI grant and a USDC grant are different
+// rows of the ledger — and this path hardcoded SUI in the type argument, so a USDC order could not
+// be granted a ceiling at all and aborted `EExceedsAllowance` against a grant of zero. The
+// relationship asserted here is the HOP: the sheet names the coin, the route passes it, the script
+// uses it. Checking any one of the three alone would have passed while the chain stayed pinned.
+{
+  const sheet = fs.readFileSync('src/web/app/components/PolicySheet.tsx', 'utf8');
+  const route = fs.readFileSync('src/ui.ts', 'utf8');
+  const script = fs.readFileSync('src/set-policy.ts', 'utf8');
+  check('the sheet names the coin it is granting against',
+    sheet.includes('body.budgetCoin'),
+    'the sheet sends a budget without saying which ledger row it is');
+  check('the route passes that coin through to the script',
+    route.includes('env.BUDGET_COIN'),
+    'the coin stops at the route, so the script cannot know which row to write');
+  check('the script uses the coin as the type argument',
+    /typeArguments:\s*\[COIN\.type\]/.test(script) && !/typeArguments:\s*\[SUI_TYPE\]/.test(script),
+    'the ledger write is pinned to one coin');
+  // AND A FIELD THE SHEET CAN WRITE MUST BE ONE THE ROUTE READS BACK. It could set a USDC ceiling
+  // and not read one, so the owner granted 0.5 USDC and the panel showed an empty box — the grant
+  // looked like it had not landed, and the agent was blamed for reading a stale figure.
+  check('the route reads back the coin the sheet offers to set',
+    /allowanceMist\(h\.capId,\s*USDC_TYPE\)/.test(route),
+    'the sheet can set a USDC ceiling but cannot read one, so the grant is invisible after signing');
+}
+
+// AN ORDER IS GENERIC, SO ITS TYPE ARGUMENT HAS TO COME FROM THE OBJECT.
+//
+// `burn-order.ts` and `refund-order.ts` both wrote `typeArguments: [SUI_TYPE]`, so a USDC order
+// failed the VM's own type check with `CommandArgumentError { kind: TypeMismatch }` — the recovery
+// path for precisely the trades the new USDC direction makes. The check is a RELATIONSHIP: every
+// script that calls `order::burn` or `order::refund` must read the coin off the object rather than
+// naming one. `settle_*` is excluded on purpose — its type arguments are the POOL's `[USDC, SUI]`,
+// which are the same in both directions and are not the order's coin.
+{
+  const offenders = [];
+  for (const f of fs.readdirSync('src').filter((n) => n.endsWith('.ts'))) {
+    const src = fs.readFileSync(`src/${f}`, 'utf8');
+    if (!/::order::(burn|refund)\b/.test(src)) continue;
+    if (!src.includes('orderCoinType')) offenders.push(`${f}: no orderCoinType`);
+    if (/typeArguments:\s*\[(SUI_TYPE|USDC_TYPE)\]/.test(src)) offenders.push(`${f}: literal coin`);
+  }
+  check('every order::burn or order::refund takes its coin type from the object',
+    offenders.length === 0,
+    offenders.join('; '));
 }
 
 if (failures) {

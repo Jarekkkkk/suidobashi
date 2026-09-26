@@ -478,9 +478,12 @@ SUI→MIST converter returned `null` for valid input.
 **Why nothing caught it.** The linter sees everything inside a template literal as
 a **string**. Neither bug was reachable by linting.
 
-**Fix, structural.** `src/web/page.js` and `src/web/markup.js` are **real modules**,
-linted and syntax-checked. The page's HTML carries one inline statement (the token)
-and two script tags.
+**Fix, structural, and since taken further.** The page's code moved into real modules
+(`src/web/page.js`, `src/web/markup.js`), linted and syntax-checked. **Both are now deleted with the
+page**, and the property they established is held a different way: the UI is a bundled React entry
+(`src/web/app/main.tsx`) that the server emits as a script tag, so no page carries script as text at
+all. The same rule in a stronger form — there is no template literal left for an escape to be eaten
+by.
 
 **Rule adopted.** When checking a served page, fetch it, extract the script, and
 run the interpreter's syntax check on it. Do not eyeball it.
@@ -489,7 +492,10 @@ run the interpreter's syntax check on it. Do not eyeball it.
 
 ## Safe markup must be a String
 
-**Status:** implemented. Caught by its own check before shipping.
+**Status:** the module is DELETED; the reasoning is kept. `src/web/markup.js` went with the old page,
+and the React app interpolates through JSX, so nothing in the tree uses `html`/`esc`/`setHtml` any
+more. It stays because it was a real bug with a non-obvious cause, and anything that builds markup
+from interpolated values later — a report, an export, an email — inherits it exactly.
 
 **The bug.** Safe markup was marked with a plain object. A plain object stringifies
 to placeholder text, and the ordinary way to render a list is to map the template
@@ -561,10 +567,15 @@ check **imports that module** — never reimplemented, never `eval`-ed:
 
 | module | checked by |
 | --- | --- |
-| `src/web/markup.js` (escaping) | `src/verify-page.js` |
-| `src/web/units.js` (decimal → integer money) | `src/verify-page.js` |
-| `src/guard-id.js` (guard adoption) | `src/verify-guard.js` |
-| `src/agent.js` (intent gate) | `src/verify-intent.js` |
+| `src/web/units.ts` (decimal → integer money) | `src/verify-page.js` |
+| `src/guard-id.ts` (guard adoption) | `src/verify-guard.js` |
+| `src/agent.ts` (intent gate) | `src/verify-intent.js` |
+
+The escaping module (`src/web/markup.js`) had a row here until the old page was deleted. The React
+app is bundled and interpolates through JSX, so it needs no `html`/`setHtml`, and a check for a
+deleted module is not a check. **The rule is unchanged** — pure logic lives in its own module and
+the check imports it — which is why `units.ts` is still one shared module rather than a copy per
+caller, and why its check may not be allowed to grow a second implementation.
 
 Also adopted: one runnable check for non-trivial logic; verify the **served**
 artefact rather than the source; and translate raw chain aborts into actionable
@@ -587,6 +598,132 @@ failed, and a hire could not be re-run. The first fix only addressed one directi
 **Decision.** Publishing v4 costs roughly 0.12 SUI and the workaround is
 Close-then-Open. **Trigger to publish:** an allowlist actually needs re-running, or
 other Move changes accumulate to batch into the same upgrade.
+
+---
+
+## A read needs no grant, and the talent says which actions spend
+
+**The claim, and the bug.** This project has said since the talent vocabulary landed that "a
+talent that spends needs a grant; a talent that only reads does not". For as long as that sentence
+existed the code disagreed with it: `validate` demanded a `hire` before it looked at the action at
+all, so a read was refused with "no hire matched". The sentence was documentation, and
+documentation the code contradicts is the dominant bug class here — it was found by running a
+read, not by reading the gate.
+
+**The decision.** An action's spend class is DECLARED BY ITS TALENT (`spends: boolean` on the
+action) — not inferred from its name, and not configured anywhere else. The gate reads it before
+judging anything, and a non-spending action returns early: no hire, no allowance, no venue, no
+suspension check, and no amount. A read has no amount, and demanding one would refuse "check my
+balances" for a number the request never needed to name.
+
+**Why declared rather than inferred.** The gate has to know BEFORE it can decide whether to demand
+a grant, so it cannot be derived afterwards from what the action turned out to do. It belongs to
+the talent for the same reason the action id does: the talent is what says what the agent can do.
+**Fail-closed:** an action nothing provides is treated as SPENDING, and so is one two talents
+disagree about. The expensive mistake is letting something spend unguarded; the cheap one is
+demanding a grant for a read.
+
+**Not an optimisation.** A suspended hire can still read its own balance, and refusing that would
+be the gate confusing "may not spend" with "may not act".
+
+**Consequence.** `hire` is `null` in a read's report, which is the honest shape — no grant was
+consulted. Both are asserted in `src/verify-query.js`, together with the regression that matters:
+making reads exempt must not make the SWAP exempt too.
+
+---
+
+## x402 on the query route, and no price that cannot be paid
+
+**Decision.** x402 belongs to routes that are not fills. A fill is paid by the fee inside the
+order, so a second charge would be paid twice; the query server therefore has **no fill route at
+all**, which makes "never charges for a fill" true by construction rather than by care.
+
+**But it is off, and recording that is the point.** The server accepts `QUERY_PRICE_MIST` and,
+above zero, answers every query `402` with those terms. **Nothing can pay yet:** paying means
+building a transaction that draws from the vault under a grant, and that path does not exist. So
+the default is zero, the manifest declares `priceMist: "0"`, and a check asserts it. Advertising a
+price while nothing could settle it would repeat the exact trap already in NOTES — a talent whose
+title promised USDC -> SUI while nothing implemented it.
+
+---
+
+## The direction is data, and it lives in one table
+
+**Context.** For most of this project's life the escrow traded one way. The contract was never the
+reason: `settle_a2b` and `settle_b2a` both existed and both enforce the maker's floor identically.
+What was missing was that nothing CALLED `settle_a2b`, so the gate refused the direction — correctly,
+while that was true. "Unbuilt, not forbidden" was the honest description, and it is now built.
+
+**The decision.** `DIRECTIONS` in `src/addresses.ts` is the single table: the input coin, the output
+coin, and which settle entry point. Everything reads it — the gate's supported list, the escrow's
+`coinWithBalance` and type argument, the filler's entry point, the advisor's pair, and the budget
+messages. A direction cannot be executable in one place and unknown in another.
+
+**Two derived facts, not written down twice.** The entry point follows from which side of the pool
+the input coin sits on, and the pool's own type arguments say which side that is — so
+`settle_a2b`/`settle_b2a` is DERIVED from `POOL_TYPE_ARGS`, and a check asserts it. And the type
+arguments are the pool's `[A, B]` in BOTH directions: the direction picks the entry point, never the
+type arguments. Writing them out per direction is how a `settle_a2b` ends up called with its
+arguments reversed — which compiles, and swaps the wrong way.
+
+**The unit error this exposed, twice.** Two places had 9 decimals baked in and were correct only
+because there was one coin: `parseAmountText` (which hardcoded the precision in three separate ways
+and was a duplicate of `toUnits` besides), and the gate's money messages, which divided by `1e9`
+and said "SUI" whatever the coin was. Both are fixed; the parser is now the one in `web/units.ts`,
+and every money figure the agent reports carries the coin it is in. The wallet-balance and allowance
+reads are also per coin now — the ledger is keyed by `(cap_id, coin_type)`, so comparing a USDC
+amount against the SUI entry would have refused or allowed for a reason unrelated to the budget.
+
+**The prerequisite, and it is not code.** The policy's cap holds no USDC allowance, so
+`create_with_policy` aborts `EExceedsAllowance` — verified by building the escrow against mainnet,
+where the PTB resolved a real USDC coin and reached that assert. Granting it is an owner-signed
+`spend_vault::set_allowance<USDC>`, and the app's budget path is SUI-only. NOT INVENTED HERE:
+whether a USDC budget should require the vault to hold USDC. That guard is right for the vault path
+and irrelevant to an order, whose escrow comes from the maker's wallet.
+
+---
+
+## The escrow can be the vault, and the draw happens at SETTLEMENT
+
+**Status: in source and unit-tested, deliberately NOT published** (version 9). Nothing is wired to it
+— a caller cannot name a package id that does not exist.
+
+**The problem it solves.** The budget bounded nothing that also had a commitment behind it. The vault
+path (`swap_and_route`) SPENDS via `spend_vault::spend` and therefore decrements the ledger, but it
+takes a caller-supplied price limit, so it cannot enforce a maker's floor. The order path enforces the
+floor and only READS the allowance, so N orders of the same size each pass a grant that covers one.
+A policy's stated ceiling was therefore a per-order limit wearing a total's name — worse than no
+limit, because a maker sizes a trade to it.
+
+**The decision.** `policy::spend_balance_from_vault` is the missing half: agent-gated, draws from the
+vault, hands back the balance without deciding where it goes. `order::create_from_vault` commits the
+vault's funds and holds NOTHING; `settle_from_vault_a2b`/`_b2a` draw at settlement and then run the
+SAME settlement a wallet order uses, so the floor assertion, the delivery and the settled marker are
+the tested ones. The only difference between the two kinds of order is where the money was before the
+call.
+
+**Draw at settlement, not at creation — and this is the load-bearing choice.** `spend_vault` has no
+credit-back: `set_allowance` is owner-gated, `spend` only debits, and there is no third function that
+increases a ceiling. An order that drew at creation and then expired could never return what it took,
+and with a one-minute window expiry is routine. Drawing at settlement means an expired commitment
+costs nothing. **What that gives up:** the ceiling is not RESERVED. A maker who commits more than the
+remaining budget gets the first settlement and not the second. A reservation needs the credit-back
+that does not exist, so this is a real trade rather than a detail.
+
+**Two gates exist on this path and not on the wallet one, and both are deliberate:**
+
+- **The OwnerCap.** This commits the owner's money, so the owner's credential is required, checked
+against the vault exactly as `policy::create` checks it. Without the gate any address could burn the
+owner's budget — nothing could be STOLEN, since every settlement pays the policy's destination, but
+spending someone's budget on trades they did not ask for is a griefing vector, not a safe default.
+- **`!suspended`**, inherited from `assert_agent_gates`. A suspended hire can still FILL a
+wallet-escrowed order, because `order.move` never reads `is_suspended`; it cannot spend from a
+suspended grant.
+
+**No destination parameter, ever.** Value leaves the vault at settlement, so a caller-chosen
+destination would let anyone commit the owner's money to any address. The commitment takes the
+policy's, exactly as the vault path does. This is the one place where copying the WALLET path's
+signature would have been a hole rather than a convenience.
 
 ---
 

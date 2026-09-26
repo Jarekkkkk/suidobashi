@@ -39,7 +39,7 @@ import {
   PACKAGE_LATEST_ID,
   OWNER_CAP_ID,
   DEPLOYER,
-  SUI_TYPE,
+  COINS,
   VAULT_ID,
   VAULT_SHARED_VERSION,
   CLOCK_ID,
@@ -49,6 +49,21 @@ import { HIRES, getHire } from './hires.js';
 
 const EMIT_BYTES = process.argv.includes('--emit-bytes');
 const EXPIRY_MS = 4_102_444_800_000n; // 2100-01-01
+
+/**
+ * WHICH COIN a budget is for, when one is being set.
+ *
+ * The OZ ledger is keyed by `(cap_id, coin_type)`, so a ceiling is PER COIN and the same digits mean
+ * different amounts: 10000000 is 0.01 SUI and 10 USDC. SUI is the default so every existing caller
+ * keeps working, and an unknown symbol fails at load rather than silently granting the wrong entry.
+ */
+const BUDGET_COIN = String(process.env.BUDGET_COIN ?? 'SUI').toUpperCase();
+const COIN = COINS[BUDGET_COIN];
+if (!COIN) {
+  throw new Error(
+    `BUDGET_COIN must be one of ${Object.keys(COINS).join(', ')}, not "${BUDGET_COIN}"`,
+  );
+}
 
 /** An absent or empty variable means "do not touch this", never "use a default". */
 function set(name: string): boolean {
@@ -158,10 +173,14 @@ async function main() {
   // The budget. Not a policy field: this is the OZ ledger, keyed by (cap_id, coin_type),
   // and `set_allowance` upserts it in place — which is also what makes it the recovery
   // path for an exhausted hire.
+  //
+  // THE COIN IS A PARAMETER, and it has to be: the ledger entry for SUI and the one for USDC are
+  // different rows, and this call hardcoded SUI — so a USDC order could not be granted a ceiling at
+  // all, which is why USDC -> SUI aborted `EExceedsAllowance` against a grant of zero.
   if (budgetMist !== null) {
     tx.moveCall({
       target: `${PACKAGE_LATEST_ID}::spend_vault::set_allowance`,
-      typeArguments: [SUI_TYPE],
+      typeArguments: [COIN.type],
       arguments: [
         tx.sharedObjectRef({
           objectId: VAULT_ID,
@@ -200,6 +219,8 @@ async function main() {
     boundBps: boundBps === null ? null : String(boundBps),
     suspended,
     budgetMist: budgetMist === null ? null : String(budgetMist),
+    // Which row of the ledger this touched, so a report is never a number without its coin.
+    budgetCoin: budgetMist === null ? null : COIN.symbol,
     allow,
     revoke,
     ok,

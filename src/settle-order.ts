@@ -85,7 +85,12 @@ async function main() {
   const poolJson = (poolObj.object ?? poolObj).json ?? {};
   const currentSqrtPrice = BigInt(String(poolJson.current_sqrt_price));
   if (currentSqrtPrice === 0n) throw new Error('could not read current_sqrt_price');
-  const sqrtPriceLimit = (currentSqrtPrice * (10_000n + SLIPPAGE_BPS)) / 10_000n;
+  // THE LIMIT SITS ON THE SIDE THE SWAP IS HEADING — the same rule as `DIRECTIONS.limitSign`. Side
+  // 'b' sells B and pushes the price up; side 'a' sells A and pushes it down. Hardcoded to the '+'
+  // case until a USDC order aborted inside `flash_swap_internal`.
+  const limitSign = SIDE === 'b' ? 1n : -1n;
+  const sqrtPriceLimit =
+    (currentSqrtPrice * (10_000n + limitSign * SLIPPAGE_BPS)) / 10_000n;
 
   const tx = new Transaction();
   tx.setSender(String(agent));

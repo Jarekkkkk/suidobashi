@@ -1,9 +1,11 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '@/lib/api';
 import { signAndSubmit, type Say, type OnTerms } from '@/lib/flow';
 import type { Event } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { short } from '@/lib/wallet';
 import { Button } from '@/components/ui/button';
+import { SourceAvatar } from '@/components/Avatar';
 import { PolicySheet } from '@/components/PolicySheet';
 import { ChatsPane } from '@/components/ChatsPane';
 import { TalentsPane } from '@/components/TalentsPane';
@@ -76,6 +78,24 @@ function Tab({ active, onClick, children }: {
   );
 }
 
+/** One row of the account menu. A button, because everything in it acts. */
+function MenuRow({ onClick, disabled, children }: {
+  onClick: () => void; disabled?: boolean; children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className={cn(
+        'block w-full px-3 py-1.5 text-left text-[12px] transition-colors',
+        'hover:bg-accent hover:text-accent-foreground disabled:opacity-50',
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
 /** A small status pill. Colour carries the meaning, so it is a token and not a literal. */
 function Pill({ tone, children }: { tone: 'muted' | 'chain' | 'advisory'; children: React.ReactNode }) {
   const tones = {
@@ -107,6 +127,12 @@ export type LeftPaneProps = {
   onNewChat: (id: string) => void;
   /** The OPEN chat was deleted, so the transcript on screen is gone. */
   onChatDeleted: () => void;
+  /**
+   * The connected address, or null. ONE SOURCE OF TRUTH: the app owns this and feeds it from the
+   * wallet's own change events, so this pane never asks the wallet anything itself.
+   */
+  address: string | null;
+  onDisconnect: () => void;
 };
 
 export function LeftPane({
@@ -117,6 +143,8 @@ export function LeftPane({
   onSelectChat,
   onNewChat,
   onChatDeleted,
+  address,
+  onDisconnect,
 }: LeftPaneProps) {
   // Chats first: it is the tab you return to, and the one that says what the app is for.
   const [tab, setTab] = useState<'chats' | 'talents' | 'notifications'>('chats');
@@ -128,6 +156,25 @@ export function LeftPane({
   const [reading, setReading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  /** The account row, for the click-outside test. */
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // CLICK-OUTSIDE AND ESCAPE CLOSE THE MENU — the same two rules PolicySheet follows, and for the
+  // same reason: a menu a click cannot dismiss reads as a modal on a page you cannot navigate.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenuOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [menuOpen]);
 
   const load = useCallback(async () => {
     setReading(true);
@@ -352,42 +399,44 @@ export function LeftPane({
         )}
       </div>
 
-      {/* THE FOOTER IS THE PANE'S, NOT A TAB'S. These act on the policy and on the chain read,
-          both of which are true whatever tab is showing — the grant is not a property of the
-          talents tab, and putting its controls inside one tab made them look like they were. */}
-      <div className="flex shrink-0 items-center gap-1 border-t border-border p-2">
+      {/* THE FOOTER IS THE PANE'S, NOT A TAB'S — the account row and the pane's actions, both of
+          which are true whatever tab is showing. The grant is not a property of the talents tab.
+
+          THE ACCOUNT LIVES HERE because a disconnected wallet never reaches this pane (it goes to
+          the home page), so this reads as the pane's own row rather than as chrome at the top. Its
+          actions sit behind ONE menu: three buttons in a footer is three things to read, and only
+          one of them is pressed often. The menu opens UPWARD — a dropdown below the last row of a
+          full-height pane has nowhere to go. */}
+      <div ref={menuRef} className="relative flex shrink-0 items-center gap-2 border-t border-border p-2">
+        <SourceAvatar source="wallet" size={22} />
+        <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground">
+          {address ? short(address) : 'not connected'}
+        </span>
         <Button
-          size="sm" variant="ghost" className="flex-1 justify-start gap-1.5"
-          onClick={() => void load()} disabled={reading} title="refresh"
+          size="icon" variant="ghost" className="h-7 w-7 shrink-0"
+          aria-label="account and pane actions" aria-expanded={menuOpen}
+          onClick={() => setMenuOpen((v) => !v)}
         >
-          {/* The icon spins while the read is in flight, because a refresh that gives no sign
-              it is working is indistinguishable from one that did nothing. */}
-          <svg
-            className={cn('h-3.5 w-3.5', reading && 'animate-spin')}
-            viewBox="0 0 24 24" fill="none" stroke="currentColor"
-            strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-          >
-            <path d="M21 12a9 9 0 1 1-2.64-6.36" />
-            <path d="M21 3v6h-6" />
+          {/* Three dots, inline: it takes currentColor like every other glyph here, and one menu
+              does not justify an icon dependency. */}
+          <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+            <circle cx="5" cy="12" r="1.7" />
+            <circle cx="12" cy="12" r="1.7" />
+            <circle cx="19" cy="12" r="1.7" />
           </svg>
-          {reading ? 'reading…' : 'refresh'}
         </Button>
 
-        <Button
-          size="sm" variant="ghost" className="gap-1.5"
-          onClick={() => setSheetOpen(true)} title="policy"
-        >
-          <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="3" />
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-          </svg>
-          policy
-        </Button>
+        {menuOpen && (
+          <div className="absolute bottom-full right-2 z-20 mb-1 w-44 overflow-hidden rounded-md border border-border bg-popover py-1 shadow-md">
+            <MenuRow onClick={() => { setMenuOpen(false); void load(); }} disabled={reading}>
+              {reading ? 'reading…' : 'refresh'}
+            </MenuRow>
+            <MenuRow onClick={() => { setMenuOpen(false); setSheetOpen(true); }}>policy</MenuRow>
+            <MenuRow onClick={() => { setMenuOpen(false); onDisconnect(); }}>disconnect</MenuRow>
+          </div>
+        )}
       </div>
 
-      {/* The sheet reads its baseline from the chain row, so it can show what a save would
-          change rather than only what the fields contain. Outside the tabs, because it is a
-          fixed overlay and the policy is not a property of whichever tab is showing. */}
       {sheetOpen && (() => {
         const h = (hires ?? []).find((x) => x.name === 'standard');
         return h ? (

@@ -626,3 +626,199 @@ fun a_fee_equal_to_the_output_aborts() {
 fun no_fee_means_the_floor_equals_the_output() {
     order::assert_pays_out_for_testing(1_000, 0, 1_000);
 }
+
+// === vault-funded commitments ===
+//
+// What these CAN prove: the create side — the owner gate, the courtesy allowance check, the
+// destination being the policy's, and above all that the order escrows NOTHING.
+//
+// What they CANNOT prove, for the same reason the settlement tests above cannot: `settle_from_vault_*`
+// takes a live Cetus `Pool`, which the unit VM cannot construct. So the DRAW — the thing that
+// decrements the ledger and makes the budget a spending total — is unverified until a live run.
+// This is the same gap the wallet path had, and it was closed there by a mainnet dry run.
+
+#[test]
+#[expected_failure(abort_code = order::EExceedsAllowance)]
+fun create_from_vault_refuses_an_amount_above_the_allowance() {
+    let mut s = ts::begin(MAKER);
+    share_clock(&mut s, NOW_MS);
+    let (policy_id, vault_id) = setup_policy_and_vault(&mut s, pool_a());
+    s.next_tx(MAKER);
+    grant(&mut s, policy_id, vault_id, 100);
+
+    s.next_tx(MAKER);
+    let clk = ts::take_shared<Clock>(&s);
+    let p = ts::take_shared_by_id<Policy>(&s, policy_id);
+    let v = ts::take_shared_by_id<Vault>(&s, vault_id);
+    let oc = ts::take_from_address<OwnerCap>(&s, MAKER);
+    order::create_from_vault<OrderTestCoin>(
+        &p, &v, &oc, 101, pool_a(), 1, 0, LATER_MS, &clk, s.ctx(),
+    );
+    ts::return_shared(clk);
+    ts::return_shared(p);
+    ts::return_shared(v);
+    // Unreachable at runtime, and still required: the cap has no `drop`, so the compiler wants it
+    // consumed even on a path that always aborts. Same shape as the clock and the shared objects.
+    ts::return_to_address(MAKER, oc);
+    s.end();
+}
+
+/// THE ASSERTION THIS DESIGN EXISTS FOR: the order escrows NOTHING.
+///
+/// `amount_in` is zero and the commitment is the only record of what settlement must draw, so the
+/// money is still in the vault. If this ever reads as the full amount the escrow has quietly moved
+/// back out of the vault, and the budget has stopped being a spending total — which is the whole
+/// change this test is attached to.
+#[test]
+fun create_from_vault_holds_no_funds_and_records_the_commitment() {
+    let mut s = ts::begin(MAKER);
+    share_clock(&mut s, NOW_MS);
+    let (policy_id, vault_id) = setup_policy_and_vault(&mut s, pool_a());
+    s.next_tx(MAKER);
+    grant(&mut s, policy_id, vault_id, 100);
+
+    s.next_tx(MAKER);
+    let clk = ts::take_shared<Clock>(&s);
+    let p = ts::take_shared_by_id<Policy>(&s, policy_id);
+    let v = ts::take_shared_by_id<Vault>(&s, vault_id);
+    let oc = ts::take_from_address<OwnerCap>(&s, MAKER);
+    let order_id = order::create_from_vault<OrderTestCoin>(
+        &p, &v, &oc, 100, pool_a(), 90, 0, LATER_MS, &clk, s.ctx(),
+    );
+    ts::return_shared(clk);
+    ts::return_shared(p);
+    ts::return_shared(v);
+    ts::return_to_address(MAKER, oc);
+
+    s.next_tx(MAKER);
+    {
+        let o = ts::take_shared_by_id<order::Order<OrderTestCoin>>(&s, order_id);
+        assert!(order::from_vault(&o));
+        assert_eq!(order::committed_amount(&o), 100);
+        // NOT escrowed. The funds are in the vault, which is the point.
+        assert_eq!(order::amount_in(&o), 0);
+        assert_eq!(order::min_out(&o), 90);
+        assert_eq!(order::maker(&o), MAKER);
+        ts::return_shared(o);
+    };
+    s.end();
+}
+
+/// A wallet-funded order is not a commitment, and reports its own funds rather than a draw.
+///
+/// The negative half of the check above: `from_vault` must be able to say NO, or a `settle_from_vault`
+/// could be aimed at an order that already holds its money and draw a SECOND time.
+#[test]
+fun a_wallet_order_is_not_a_commitment() {
+    let mut s = ts::begin(MAKER);
+    share_clock(&mut s, NOW_MS);
+
+    s.next_tx(MAKER);
+    let clk = ts::take_shared<Clock>(&s);
+    let order_id = order::create<OrderTestCoin>(
+        coin::mint_for_testing<OrderTestCoin>(1_000, s.ctx()),
+        pool_a(), 900, LATER_MS, MAKER, &clk, s.ctx(),
+    );
+    ts::return_shared(clk);
+
+    s.next_tx(MAKER);
+    {
+        let o = ts::take_shared_by_id<order::Order<OrderTestCoin>>(&s, order_id);
+        assert!(!order::from_vault(&o));
+        // Zero here means "not a commitment", not "a commitment of nothing" — which is why
+        // `from_vault` is the question to ask first.
+        assert_eq!(order::committed_amount(&o), 0);
+        assert_eq!(order::amount_in(&o), 1_000);
+        ts::return_shared(o);
+    };
+    s.end();
+}
+
+/// THE DESTINATION IS THE POLICY'S, NOT THE CALLER'S, and there is no parameter to say otherwise.
+#[test]
+fun create_from_vault_uses_the_policys_destination() {
+    let mut s = ts::begin(MAKER);
+    share_clock(&mut s, NOW_MS);
+    let (policy_id, vault_id) = setup_policy_and_vault(&mut s, pool_a());
+    s.next_tx(MAKER);
+    grant(&mut s, policy_id, vault_id, 100);
+
+    s.next_tx(MAKER);
+    let clk = ts::take_shared<Clock>(&s);
+    let p = ts::take_shared_by_id<Policy>(&s, policy_id);
+    let v = ts::take_shared_by_id<Vault>(&s, vault_id);
+    let oc = ts::take_from_address<OwnerCap>(&s, MAKER);
+    let order_id = order::create_from_vault<OrderTestCoin>(
+        &p, &v, &oc, 10, pool_a(), 1, 0, LATER_MS, &clk, s.ctx(),
+    );
+    ts::return_shared(clk);
+    ts::return_shared(p);
+    ts::return_shared(v);
+    ts::return_to_address(MAKER, oc);
+
+    s.next_tx(MAKER);
+    {
+        let o = ts::take_shared_by_id<order::Order<OrderTestCoin>>(&s, order_id);
+        // MAKER is the policy's destination in this fixture, and MAKER is also the sender — so this
+        // would pass even if the destination were taken from the caller. The NEXT test is the one
+        // that separates them.
+        assert_eq!(order::destination(&o), MAKER);
+        ts::return_shared(o);
+    };
+    s.end();
+}
+
+/// A STRANGER must not be able to create one. Every settlement still pays the policy's destination, so
+/// nothing can be stolen — but the budget would be burned on trades the owner never asked for.
+#[test]
+#[expected_failure(abort_code = order::ENotOwner)]
+fun create_from_vault_refuses_a_cap_from_another_vault() {
+    let mut s = ts::begin(MAKER);
+    share_clock(&mut s, NOW_MS);
+    let (policy_id, vault_id) = setup_policy_and_vault(&mut s, pool_a());
+    s.next_tx(MAKER);
+    grant(&mut s, policy_id, vault_id, 100);
+
+    // A second vault's cap, which does not belong to this policy's vault. `new` returns an
+    // unshared vault, and neither it nor its cap has `drop` — so both are consumed below, on a line
+    // this test never reaches because it expects an abort.
+    let (other_v, other_oc) = spend_vault::new(s.ctx());
+
+    s.next_tx(MAKER);
+    let clk = ts::take_shared<Clock>(&s);
+    let p = ts::take_shared_by_id<Policy>(&s, policy_id);
+    let v = ts::take_shared_by_id<Vault>(&s, vault_id);
+    order::create_from_vault<OrderTestCoin>(
+        &p, &v, &other_oc, 10, pool_a(), 1, 0, LATER_MS, &clk, s.ctx(),
+    );
+    ts::return_shared(clk);
+    ts::return_shared(p);
+    ts::return_shared(v);
+    spend_vault::destroy(other_v, other_oc, s.ctx());
+    s.end();
+}
+
+#[test]
+#[expected_failure(abort_code = order::EZeroAmount)]
+fun create_from_vault_refuses_a_zero_amount() {
+    let mut s = ts::begin(MAKER);
+    share_clock(&mut s, NOW_MS);
+    let (policy_id, vault_id) = setup_policy_and_vault(&mut s, pool_a());
+    s.next_tx(MAKER);
+    grant(&mut s, policy_id, vault_id, 100);
+
+    s.next_tx(MAKER);
+    let clk = ts::take_shared<Clock>(&s);
+    let p = ts::take_shared_by_id<Policy>(&s, policy_id);
+    let v = ts::take_shared_by_id<Vault>(&s, vault_id);
+    let oc = ts::take_from_address<OwnerCap>(&s, MAKER);
+    order::create_from_vault<OrderTestCoin>(
+        &p, &v, &oc, 0, pool_a(), 1, 0, LATER_MS, &clk, s.ctx(),
+    );
+    ts::return_shared(clk);
+    ts::return_shared(p);
+    ts::return_shared(v);
+    // Unreachable; required, because the cap cannot be dropped.
+    ts::return_to_address(MAKER, oc);
+    s.end();
+}

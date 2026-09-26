@@ -42,9 +42,12 @@ const STEP_OF: Record<string, Step> = {
 /** Friendly labels for the terms the server describes. Unknown keys fall back to the key. */
 const LABEL: Record<string, string> = {
   action: 'action',
-  escrowSui: 'escrow',
-  minOutUsdc: 'you receive at least',
-  feeOutUsdc: 'fee to the filler',
+  direction: 'direction',
+  /** The value carries its own unit and coin (`"1 USDC"`), so no UNIT entry is needed. */
+  budget: 'budget',
+  escrow: 'escrow',
+  minOut: 'you receive at least',
+  feeOut: 'fee to the filler',
   orderId: 'order',
   amountSui: 'amount',
   hire: 'hire',
@@ -58,12 +61,15 @@ const LABEL: Record<string, string> = {
   width: 'width',
 };
 
-/** The unit a term carries. Values arrive decimal; only the unit needs adding. */
+/**
+ * The unit a term carries, for the terms that do NOT carry one themselves.
+ *
+ * The order's terms are absent from this map on purpose: their unit depends on the direction, so
+ * the value arrives as "0.01 SUI" rather than as a number this would have to guess at. A map keyed
+ * by field name cannot express "USDC today, SUI tomorrow".
+ */
 const UNIT: Record<string, string> = {
-  escrowSui: ' SUI',
   amountSui: ' SUI',
-  minOutUsdc: ' USDC',
-  feeOutUsdc: ' USDC',
   usdc: ' USDC',
   suiHeadroom: ' SUI',
 };

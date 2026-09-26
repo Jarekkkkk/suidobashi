@@ -18,25 +18,35 @@
  *     multi-hop routes through thin tokens. Acting on one would produce a bad
  *     fill. Above the ceiling we refuse to recommend anything.
  *
- * Usage: node src/advisor.js [amountMist]
+ * Usage: node src/advisor.js [amountIn] [direction]
  */
 import 'dotenv/config';
-
-const SUI_TYPE = '0x2::sui::SUI';
-// Native USDC on Sui mainnet.
-const USDC_TYPE =
-  '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC';
-
-const AMOUNT_MIST = BigInt(process.argv[2] ?? '500000000'); // 0.5 SUI
-const MAX_DEVIATION = 0.02; // 2% off reference market — refuse beyond this
+// The coin types and the trailing-segment comparison both come from addresses.ts. They used to be
+// duplicated here, which is how a comparison rule ends up applied in one place and not another.
+import { DIRECTIONS, shortCoinType, type Direction } from './addresses.js';
 
 /**
- * Compare coin types on their trailing segments only. The aggregator returns
- * SUI in full form (0x000...002::sui::SUI) while our constants use short form,
- * and `normalizeCoinType` does not bridge that — so a naive equality test
- * silently never matches and every route looks multi-hop.
+ * WHICH WAY, as the second argument. Defaulting to SUI -> USDC keeps every existing caller working
+ * — it is what the one direction used to mean.
  */
-const shortType = (t: unknown) => String(t).split('::').slice(-2).join('::');
+const DIRECTION = (process.argv[3] ?? 'SUI->USDC') as Direction;
+const DIR = DIRECTIONS[DIRECTION];
+if (!DIR) {
+  console.error(
+    `direction must be one of ${Object.keys(DIRECTIONS).join(', ')}, not "${process.argv[3]}"`,
+  );
+  process.exit(2);
+}
+
+/**
+ * 0.5 of the INPUT coin, so asking for a quote is cheap.
+ *
+ * `AMOUNT_MIST` was the old name and it defaulted to 500000000 — 0.5 SUI, which would be 500 SUI if
+ * it were read as USDC units. Deriving it from the direction's decimals makes the default mean half
+ * a coin in either direction instead of silently meaning half a billion of something else.
+ */
+const AMOUNT_IN = BigInt(process.argv[2] ?? String(10n ** BigInt(DIR.in.decimals) / 2n));
+const MAX_DEVIATION = 0.02; // 2% off reference market — refuse beyond this
 
 async function main() {
   const { AggregatorClient, getProvidersIncluding, CETUS } =
@@ -48,9 +58,9 @@ async function main() {
   const client = new AggregatorClient({});
 
   const res = await client.findRouters({
-    from: SUI_TYPE,
-    target: USDC_TYPE,
-    amount: new BN(AMOUNT_MIST.toString()),
+    from: DIR.in.type,
+    target: DIR.out.type,
+    amount: new BN(AMOUNT_IN.toString()),
     byAmountIn: true,
     providers: getProvidersIncluding([CETUS]),
   });
@@ -60,19 +70,20 @@ async function main() {
   const paths = res.paths ?? [];
   const deviation = res.deviationRatio != null ? Number(res.deviationRatio) : null;
 
-  // Only a direct single-hop SUI -> USDC path is executable by our module: one
-  // pool, one direction, no intermediate tokens.
+  // Only a direct single-hop path IN THIS DIRECTION is executable by our module: one pool, no
+  // intermediate tokens. The direction is the caller's now, so this compares against it rather than
+  // against the pair that used to be the only one.
   const direct = paths.find(
-    (p) => shortType(p.from) === shortType(SUI_TYPE)
-      && shortType(p.target) === shortType(USDC_TYPE),
+    (p) => shortCoinType(p.from) === shortCoinType(DIR.in.type)
+      && shortCoinType(p.target) === shortCoinType(DIR.out.type),
   );
 
   const admissible = deviation == null || deviation <= MAX_DEVIATION;
 
   console.log(JSON.stringify({
     mode: 'advisor',
-    pair: 'SUI -> USDC',
-    amountIn: String(res.amountIn ?? AMOUNT_MIST),
+    pair: `${DIR.in.symbol} -> ${DIR.out.symbol}`,
+    amountIn: String(res.amountIn ?? AMOUNT_IN),
     quoteAmountOut: String(res.amountOut ?? ''),
     deviationRatio: deviation,
     deviationCeiling: MAX_DEVIATION,
@@ -88,7 +99,8 @@ async function main() {
   }
 
   if (!direct) {
-    console.log('\nNo direct SUI -> USDC Cetus CLMM path. Our module cannot execute a multi-hop route.');
+    console.log(`\nNo direct ${DIR.in.symbol} -> ${DIR.out.symbol} Cetus CLMM path. `
+      + 'Our module cannot execute a multi-hop route.');
     process.exit(3);
   }
 

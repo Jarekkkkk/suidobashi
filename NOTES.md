@@ -82,7 +82,9 @@ the budget is authority, and they are not the same number.
   sidecar instead.
 - **Pool is pinned, not chosen per transaction.** The aggregator's routing is
   non-deterministic between calls at identical parameters, so advice is unstable.
-- **No multi-hop or split routing.** Our module executes one pool, one direction.
+- **No multi-hop or split routing.** Our module executes one pool, at most one hop. It handles
+  BOTH directions of that pair — the direction is chosen per order and read back off the order's own
+  type — but never two pools, and never a split.
 
 ## Security posture of the local surface
 
@@ -295,8 +297,13 @@ which is a `SyntaxError` — the whole module failed to parse, so no handler att
 and *every* button on the page did nothing. The linter cannot see code inside a
 string, so neither bug was catchable before serving it.
 
-The fix is structural, not a repair: the page's code now lives in `src/web/page.js`
-and `src/web/markup.js`, served as real modules. Both are linted and `node --check`ed.
+The fix was structural, not a repair: the page's code moved into `src/web/page.js`
+and `src/web/markup.js`, served as real modules, both linted and `node --check`ed.
+**THOSE TWO FILES ARE GONE NOW** — they went with the old page when `/` was deleted, so do not go
+looking for them. What outlives them is the lesson, which has nothing to do with where the file
+lived: never put script inside a template literal, because the linter cannot see it and the escapes
+are eaten before the browser does. The app keeps that property by being a bundled entry point
+(`src/web/app/main.tsx`) rather than by being a string the server emits.
 When checking a served page, extract the script and run `node --check` on it — do not
 eyeball it, and do not trust the linter.
 
@@ -364,9 +371,10 @@ which is a property of the CALLERS, not of the module, so the guard belongs in t
 
 **The served CSS and JS are built ONCE, at startup, and held in memory.** `buildAppBundle()` runs
 in the listen path and `appBundle.css` is served from that snapshot, so editing `app.css` and
-reloading the browser shows the OLD theme. The page modules (`page.js`, `markup.js`) are read per
-request and do not have this property — the two behave differently, which is what makes it a
-trap rather than a rule. Restart the server after a style change, or check on a second port.
+reloading the browser shows the OLD theme. **Everything served now comes from that snapshot** — the
+page modules that used to be read per request went with the old page, so this is no longer a
+difference between two kinds of route but the only way to see a change at all. Restart after a
+style change, or check on a second port.
 
 **An opacity tier on a TEXT COLOUR is a dark-theme assumption.** `text-muted-foreground/60` reads
 fine on near-black and is 2.25:1 on cream; `/50` is 1.94:1, `/40` is 1.68:1. Matsu's
@@ -375,6 +383,115 @@ all — 21 sites in six components became the plain token, and the hierarchy the
 by size, weight and case instead. The measurements live in `app.css` beside the token. ANY palette
 swap has to be checked for this: the `/NN` suffixes are invisible in a diff of the theme file
 alone, and every one of them was fine before.
+
+**The gate demanded a grant for every action, including reads, while the docs said it did not.**
+`HANDOFF` claimed "a talent that only reads does not need one" from the day the talent vocabulary
+landed, and `validate` contradicted it the whole time: the `hire` check sat before every
+action-specific branch, so a read was refused with "no hire matched". A sentence the code
+disagrees with is this project's dominant bug class, and this one was found by RUNNING a read
+rather than by reading the gate — which is the only way it could have been found, because the gate
+looks correct until you ask it for something that is not a swap.
+
+The fix is a property the gate has to know **before** it judges: `spends` is declared by the
+talent, because the gate cannot wait to see what an action does before deciding whether to demand
+a grant. Fail-closed, so an action nothing provides counts as spending. The whole story is in
+`DECISIONS.md`; the assertion that keeps it true — a read reports `hire: null`, and the SWAP still
+reports one — is in `src/verify-query.js`.
+
+**When a draft spec and a reference implementation disagree, the implementation is the current
+one — and the disagreement is worth writing down.** A service fee is `{ "x402": { "asset", "amount" } }`
+in `docs/MCP-STANDARD.md` and `terms: { minFeeOut, feeAsset, … }` in the filler that actually
+serves fills. Both spellings mean one fee; the doc is the older one and says of itself that it is a
+draft. The new query server follows the code. The trap is not the doc being wrong — it is that a
+reader who follows the doc will send a manifest field no server reads, and get a fill that looks
+free.
+
+**A budget that reads as a total and is not is worse than no budget — and there are two ways to
+make it one, only one of which works.** The ledger (`spend_vault`) is the only thing that can bound
+total spend, and its public surface has **no credit-back**: `set_allowance` is owner-gated, `spend`
+only debits, `revoke` removes. So "draw the escrow out of the vault at creation" — the obvious
+reading of "move the escrow into the vault" — leaks the budget of every order that expires, and with
+a 60-second window expiry is the common case. The choice that survives is to draw at SETTLEMENT: the
+commitment holds nothing, and an expired one costs no budget at all. The price is that the ceiling is
+not reserved, which is stated in the code, in DECISIONS.md and in HANDOFF rather than discovered
+later. Before designing anything on top of a ledger, enumerate what it can DEBIT and whether anything
+can CREDIT — a limit whose only writer is the owner cannot be given back by a permissionless path.
+
+**A destination that the caller supplies is a hole the moment the funds are not theirs.** The wallet
+order path takes a `destination` and that is right: it is the maker's own escrowed coin. The
+vault-funded path must NOT, because the money is the owner's — with a caller-chosen destination,
+anyone could commit the owner's funds to their own address. `create_from_vault` therefore has no
+destination parameter at all, and takes the policy's. Copying the neighbouring signature would have
+been the natural thing to do and it would have shipped a theft.
+
+**A completion claim written from the plan is not a claim about the code.** The old page at `/`
+carried the note "the app at `/app` now covers swap, orders, and every policy boundary. Nothing in `/`
+is unreachable from `/app`. Mostly a deletion." Seven operations had NO control in `/app` — `topup`,
+`withdraw`, `position`, `deposit`, `rebalance`, `redeem`, `repoint` — and the component written for
+them (`ActionForm.tsx`) had never been rendered even once. The store server-side could build all
+sixteen kinds the whole time, which is exactly what makes this shape sneaky: the capability is
+there, so a grep for the feature succeeds, and only a grep for the CALLER shows that nothing
+reaches it. Before deleting a UI on the grounds that its replacement covers the same ground,
+enumerate the replacement's controls and diff them against the ones being removed — `grep "<"` on
+the component is enough, and it takes a minute.
+
+The deletion itself was still right, and the distinction it turned on is worth keeping: what went
+was the UI path, not the capability. Every one of the seven still has an `--emit-bytes` script, and
+signing is the wallet's job either way — so nothing became impossible, only inconvenient.
+
+**A flat fee is the filler's ABSOLUTE floor, so a minimum trade size is real — and "fixing" the flat
+fee is the trap.** The default fee for a new order is `10^decimals / 100` — 0.01 of the output coin.
+That LOOKS like a dust-size bug when a 0.01 SUI trade (quoting ~0.012 USDC) is refused, since the fee
+is then 84% of the output. It is not a bug: `MCP_MIN_FEE_OUT` is 0.01 USDC, an absolute cost the
+reference filler enforces with `fee < floor → refuse`, so a maker offering less escrows money nobody
+will take. The output must cover the floor plus something for the maker, and that puts a floor under
+the trade SIZE.
+
+**I got this backwards first, and the entry is kept because the reversal is the lesson.** I made the
+default proportional — ten basis points of the live quote — and it did make the 0.01 SUI order build:
+escrow 0.01 SUI, fee 0.000012 USDC, `ok` from the simulation. Every one of those would have been
+refused by the filler and expired. **The build succeeding was the bug, not the fix.** When a bound is
+ABSOLUTE, a value that scales to meet it is a value that fails below it.
+
+The real defect was the MESSAGE: it listed three possible causes and named no figure, so a trade that
+was simply too small read like a broken aggregator. It now names the fee, what the maker would
+receive, and the input that WOULD work — derived from the live quote rather than written down,
+because a hardcoded threshold is wrong by the afternoon.
+
+**A budget is per COIN, and one of them was hardcoded.** `set_allowance` is keyed by
+`(cap_id, coin_type)`, so a SUI ceiling and a USDC ceiling are different rows of the ledger — but the
+policy path wrote `typeArguments: [SUI_TYPE]`, so a USDC grant was not impossible to express, it was
+impossible to REACH: a USDC order aborted `EExceedsAllowance` against a grant of zero and the sheet
+had no way to fix it. The hop is three files wide (sheet → route → script) and **each one looked
+right on its own**, which is why the check asserts the RELATIONSHIP rather than any single file: the
+sheet names the coin, the route passes it, the script uses it as the type argument.
+
+**THE POOL'S OWN ERROR NAME SETTLED THIS IN ONE GREP, AND THAT IS THE GENERAL LESSON.**
+`USDC -> SUI` orders aborted in the pool with `abort code: 11` inside `pool::flash_swap_internal` and
+expired unfilled — twice — while everything on OUR side looked right: the direction was in the table,
+the escrow built, the filler simulated, the gate allowed it. Fetching Cetus's own `pool.move`:
+
+```move
+const EWrongSqrtPriceLimit: u64 = 11;
+...
+if (a2b) {
+    assert!(pool.current_sqrt_price > sqrt_price_limit && ..., EWrongSqrtPriceLimit);
+} else {
+    assert!(pool.current_sqrt_price < sqrt_price_limit && ..., EWrongSqrtPriceLimit);
+}
+```
+
+The limit must sit BELOW the current price for `a2b` and ABOVE it for `b2a`. The filler sent
+`current * (10_000 + slippage) / 10_000` unconditionally — the `b2a` form — which is exactly why every
+SUI -> USDC order filled and every USDC -> SUI order died.
+
+**Our own slippage bound could not have caught it.** `assert_within_bps` compares MAGNITUDES and is
+symmetric about the side, so a wrong-side limit passes our check and is refused by the pool. A
+symmetric check on a direction-dependent value will never notice which way it points. The sign now
+lives in `DIRECTIONS.limitSign`, beside the settle entry point, because it is the same kind of fact.
+
+When an abort comes from a DEPENDENCY, fetch its source: the abort code named nothing, and its error
+constant named everything.
 
 ***
 

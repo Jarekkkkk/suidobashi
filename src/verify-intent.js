@@ -40,6 +40,10 @@ function check(label, ok, detail) {
 }
 import { installTalent, listTalents } from './db.ts';
 import { talentFor } from './talents.ts';
+import {
+  DIRECTIONS, POOL_TYPE_ARGS, USDC_TYPE,
+  directionForCoinType, orderCoinType,
+} from './addresses.ts';
 
 // ENSURE WHAT THESE CASES EXERCISE IS INSTALLED.
 //
@@ -94,8 +98,18 @@ const CASES = [
   },
   {
     text: 'swap 0.01 USDC to SUI',
-    why: 'the reverse direction is unsupported',
-    expect: { decision: 'REFUSED', reasonHas: 'only SUI -> USDC is supported' },
+    why: 'the reverse direction is now EXECUTABLE, so it proposes — this case used to assert the '
+      + 'opposite, and it is inverted rather than deleted so the change is visible',
+    expect: { decision: 'PROPOSED' },
+  },
+  {
+    // THE BALANCE CHECK IN THE NEW COIN. The injected figures are in whatever coin is being
+    // checked, so for this case they are USDC: a 100 USDC wallet and a 10 USDC grant. An amount
+    // above the wallet must refuse for the BALANCE and name USDC — before the direction existed
+    // this path divided by 1e9 and said "SUI" whatever the coin was.
+    text: 'swap 200 USDC to SUI',
+    why: 'the balance refusal must work, and read correctly, in the new direction',
+    expect: { decision: 'REFUSED', reasonHas: 'USDC exceeds your wallet balance' },
   },
   {
     text: 'swap 0.01 to USDC',
@@ -229,39 +243,102 @@ try {
   failed++;
 }
 
-// THE GATE'S DIRECTION MUST MATCH WHAT THE ORDER PATH CAN DO.
+// THE GATE'S DIRECTIONS MUST MATCH WHAT THE ORDER PATH CAN DO, AND WHAT THE FILLER SETTLES.
 //
 // The talent offered "Swap SUI for USDC, or USDC for SUI" and the gate refused the second — both
-// were reading from the same facts and only one of them was right. The contract has `settle_a2b`
-// AND `settle_b2a`, so both directions LOOK reachable; what makes one of them real is whether
-// anything escrows that coin and anything settles that pair.
+// were reading from the same facts and only one of them was right. `settle_a2b` and `settle_b2a`
+// both exist on chain, so both directions LOOK reachable; what makes one of them real is whether
+// anything escrows that coin and anything settles that entry point.
 //
-// Read from the sources rather than asserted, for the same reason as the other checks: a claim
-// that disagrees with the code is the bug, and a list would be one more thing to keep in step.
+// ASSERTED AS A RELATIONSHIP OVER THE TABLE, not as expected strings. The previous version of this
+// block grepped `SUPPORTED_FROM` and `SUPPORTED_TO`, which stopped existing the moment a second
+// direction arrived — so it would have passed while checking nothing. A check that names a shape
+// fails on correct code, and this project has now paid for that five times.
 {
   const orderSrc = fs.readFileSync(new URL('./create-order.ts', import.meta.url), 'utf-8');
   const fillerSrc = fs.readFileSync(new URL('./mcp-server.ts', import.meta.url), 'utf-8');
   const gateSrc = fs.readFileSync(new URL('./agent.ts', import.meta.url), 'utf-8');
 
-  const escrowsSui = /type:\s*SUI_TYPE/.test(orderSrc);
-  const settlesB2a = /order::settle_b2a/.test(fillerSrc);
-  const settlesA2b = /order::settle_a2b/.test(fillerSrc);
-  const from = gateSrc.match(/SUPPORTED_FROM = '(\w+)'/)?.[1];
-  const to = gateSrc.match(/SUPPORTED_TO = '(\w+)'/)?.[1];
+  // SIDES COME FROM THE POOL'S OWN TYPE ARGUMENTS: A is the first, B the second. An order holding
+  // side A settles a2b, one holding B settles b2a. Derived rather than written out, so a reversed
+  // type-argument list is caught here instead of on chain — where it would swap the wrong way.
+  const [A, B] = POOL_TYPE_ARGS;
+  const entryPoint = (coin) => (coin === A ? 'settle_a2b' : coin === B ? 'settle_b2a' : null);
 
-  check('the gate declares a supported direction', Boolean(from && to), `${from} -> ${to}`);
-  check('the gate matches what the order escrows',
-    (from === 'SUI') === escrowsSui,
-    `gate says ${from}, the order escrows ${escrowsSui ? 'SUI' : 'something else'}`);
-  check('the gate matches what the filler settles',
-    (to === 'USDC') === settlesB2a && (from === 'SUI') === settlesB2a,
-    `gate says ${from} -> ${to}; the filler settles ${settlesB2a ? 'b2a (SUI -> USDC)' : settlesA2b ? 'a2b' : 'nothing'}`);
+  check('every direction settles through the entry point its input coin sits on',
+    Object.values(DIRECTIONS).every((d) => d.settle === entryPoint(d.in.type)),
+    Object.entries(DIRECTIONS).map(([n, d]) => `${n} -> ${d.settle}`).join(', '));
 
-  // NOT CHECKED: that the reverse direction is unoffered. It cannot be asserted here — the claim
-  // lives in a talent's prose, and a check that greps a sentence is one that breaks when someone
-  // improves the wording. Worth knowing rather than papering over: THE REVERSE DIRECTION IS
-  // UNBUILT, NOT FORBIDDEN. `settle_a2b` exists on chain and nothing calls it, so adding the gate
-  // branch for USDC -> SUI would look like the whole change and would be half of it.
+  check('each direction\'s output is the other direction\'s input',
+    DIRECTIONS['SUI->USDC'].out.type === DIRECTIONS['USDC->SUI'].in.type
+    && DIRECTIONS['USDC->SUI'].out.type === DIRECTIONS['SUI->USDC'].in.type,
+    'the table does not describe one pair traded two ways');
+
+  // ONE FILLER REACHES BOTH ENTRY POINTS, and it works out which from the order itself. That is
+  // what was missing while `settle_a2b` existed on chain and nothing called it: the entry point has
+  // to be selected, not written down per script.
+  check('the filler chooses the entry point from the order rather than being told',
+    fillerSrc.includes('directionForCoinType') && fillerSrc.includes('order::${seen.dir.settle}'),
+    'the filler does not read the direction off the order');
+  check('the filler passes the pool type arguments in the pool\'s own order',
+    fillerSrc.includes('typeArguments: [...POOL_TYPE_ARGS]'),
+    'written out per direction, which is how a2b gets called with its arguments reversed');
+
+  check('the gate takes its directions from the same table',
+    gateSrc.includes('Object.entries(DIRECTIONS)'),
+    'the gate keeps its own list of directions, which will drift from the table');
+  check('the order escrows the direction\'s input coin',
+    orderSrc.includes('type: DIR.in.type') && orderSrc.includes('typeArguments: [DIR.in.type]'),
+    'the escrow names a literal coin instead of the direction\'s');
+
+  // THE LIMIT MUST SIT ON THE SIDE EACH DIRECTION HEADS — and this is the one the POOL enforces,
+  // not us. `assert_within_bps` compares MAGNITUDES and is deliberately symmetric about the side,
+  // so a limit on the wrong side passes our own bound and is then rejected by
+  // `flash_swap_internal` before any swap happens. That is how every USDC -> SUI order came to
+  // abort in the pool and expire unfilled while SUI -> USDC filled.
+  check('the price limit sits on the side each direction heads',
+    Object.values(DIRECTIONS).every((d) => d.limitSign === (d.settle === 'settle_b2a' ? 1 : -1)),
+    Object.entries(DIRECTIONS).map(([n, d]) => `${n}: ${d.settle} sign ${d.limitSign}`).join(', '));
+  check('both scripts take the sign from the direction rather than a literal',
+    fillerSrc.includes('limitSign')
+    && fs.readFileSync(new URL('./settle-order.ts', import.meta.url), 'utf-8').includes('limitSign'),
+    'a script still hardcodes which side the limit goes');
+
+  // ── The parsing that decides a2b from b2a ──────────────────────────────────
+  //
+  // This is the one piece of the filler's new logic that no transaction can exercise until a USDC
+  // order exists on chain, so it is pinned here instead. It reads an ORDER OBJECT TYPE, which is
+  // the only place an order's coin appears: a `Balance<T>` field arrives in `json` as a number.
+  {
+    const suiOrder = '0x2441fb74d7684f43019fdabf27d6de24dc8e42826ddd86ba07bc21aded80c014'
+      + '::order::Order<0x2::sui::SUI>';
+    const usdcOrder = '0x2441fb74d7684f43019fdabf27d6de24dc8e42826ddd86ba07bc21aded80c014'
+      + `::order::Order<${USDC_TYPE}>`;
+
+    check('the coin is read off an order object type',
+      orderCoinType(suiOrder) === '0x2::sui::SUI' && orderCoinType(usdcOrder) === USDC_TYPE,
+      `${orderCoinType(suiOrder)} / ${orderCoinType(usdcOrder)}`);
+
+    // THE SIDE, which is what picks the entry point. SUI is B, USDC is A — from the pool.
+    check('each order type maps to the direction its coin is the input of',
+      directionForCoinType(orderCoinType(suiOrder)) === 'SUI->USDC'
+      && directionForCoinType(orderCoinType(usdcOrder)) === 'USDC->SUI',
+      `${directionForCoinType(orderCoinType(suiOrder))} / ${directionForCoinType(orderCoinType(usdcOrder))}`);
+
+    // And the entry point that direction names is the side that coin sits on. `?.` rather than a
+    // bare lookup: if the mapping ever breaks, this should FAIL one check rather than throw and
+    // take the whole suite down with it.
+    check('and to the matching settle entry point',
+      DIRECTIONS[directionForCoinType(orderCoinType(usdcOrder)) ?? '']?.settle === 'settle_a2b'
+      && DIRECTIONS[directionForCoinType(orderCoinType(suiOrder)) ?? '']?.settle === 'settle_b2a');
+
+    // FAIL-CLOSED. An order of some other coin is refused rather than defaulted to a direction,
+    // which on a wrong guess would swap the wrong way.
+    check('an order of an unknown coin maps to no direction',
+      orderCoinType('0x2::order::Order<0x2::coin::COIN>') === '0x2::coin::COIN'
+      && directionForCoinType('0x2::coin::COIN') === null
+      && directionForCoinType('') === null);
+  }
 }
 
 const total = CASES.length + 1 + sideChecks;
