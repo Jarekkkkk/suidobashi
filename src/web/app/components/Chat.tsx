@@ -3,6 +3,7 @@ import { api, fromUnits, type Event } from '@/lib/api';
 import { signAndSubmit } from '@/lib/flow';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
+import { SourceAvatar } from '@/components/Avatar';
 
 /*
  * The chat: the core loop, and the reclaim that follows it.
@@ -20,18 +21,12 @@ import { Button } from '@/components/ui/button';
  */
 
 /**
- * The colour of an event's source. Advisory and authoritative must not look alike.
+ * What each source IS, in three words. Shown on hover.
  *
- * Tokens rather than literals: these map onto warning, muted-foreground and success, so
- * retuning the status palette retunes the conversation's sense of what is trustworthy.
+ * A creature says WHO is talking, not what they are — and the difference matters here more than
+ * usual: the model's words are advisory, the pipeline's are unconfirmed, and the chain's are
+ * facts. The avatar carries the identity; this carries the standing.
  */
-const SOURCE_STYLE: Record<Event['source'], string> = {
-  model: 'text-advisory',
-  pipeline: 'text-pipeline',
-  chain: 'text-chain',
-};
-
-/** What each source IS, in three words. Shown on hover, because the colour is not enough. */
 const SOURCE_TITLE: Record<Event['source'], string> = {
   model: 'the local model — advisory',
   pipeline: 'our own pipeline — not yet confirmed',
@@ -287,15 +282,13 @@ export function Chat({
                     e.terminal && !isAsk && 'mt-1',
                   )}
                 >
-                  <div className="flex items-baseline gap-2.5">
-                    <span
-                      title={SOURCE_TITLE[e.source]}
-                      className={cn(
-                        'w-[54px] shrink-0 select-none text-right font-mono text-[10px]',
-                        SOURCE_STYLE[e.source],
-                      )}
-                    >
-                      {isAsk ? 'you' : e.source}
+                  <div className="flex items-start gap-2.5">
+                    {/* A creature per source, in place of a text label. Four voices talk in one
+                        column — you, the model, the pipeline, the chain — and colour alone makes
+                        that a wall of tinted text. The creature turns it into a conversation
+                        with participants, which is what it actually is. */}
+                    <span title={SOURCE_TITLE[e.source]} className="mt-0.5">
+                      <SourceAvatar source={isAsk ? 'you' : e.source} />
                     </span>
                     <span className={cn(
                       'min-w-0 whitespace-pre-line break-words text-[13px] leading-relaxed',
@@ -313,7 +306,7 @@ export function Chat({
                       the original named two, and sending it back would ask the same question
                       forever. */}
                   {e.kind === 'asking' && Array.isArray(e.data?.options) && (
-                    <div className="mt-2 flex flex-wrap gap-1.5 pl-[64px]">
+                    <div className="mt-2 flex flex-wrap gap-1.5 pl-[34px]">
                       {(e.data!.options as string[]).map((o) => (
                         <button
                           key={o}

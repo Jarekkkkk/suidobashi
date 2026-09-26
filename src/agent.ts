@@ -135,7 +135,11 @@ const SUPPORTED_TO = 'USDC';
  */
 function parseAmountText(text: string) {
   const t = String(text ?? '').trim();
-  if (t === '') return { ok: true, amountMist: 0n };
+  // `unknown` IS NOT AN AMOUNT. The model writes it when it cannot read one, and it was being
+  // reported as `amount "unknown" is not a plain decimal` — a refusal that reads as the USER's
+  // mistake for something the model did, and names a decimal nobody typed. Treated as absent,
+  // which is what it means, so the next check says "no amount given" instead.
+  if (t === '' || /^unknown$/i.test(t)) return { ok: true, amountMist: 0n };
   if (!/^\d+(\.\d{1,9})?$/.test(t)) {
     return { ok: false, reason: `amount "${t}" is not a plain decimal with at most 9 places` };
   }

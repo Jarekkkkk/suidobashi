@@ -1528,12 +1528,16 @@ const server = http.createServer((req, res) => {
       // THE MARKETPLACE AND WHAT IS INSTALLED, as two lists. The tab shows the first as things
       // you can add and marks the ones already in the second — which is what a marketplace is,
       // and why nobody types a URL any more.
+      // ORPHANS ARE DROPPED, not shown. An id that is no longer in the marketplace is a row from
+      // before a rename — three iterations left two behind, and the pane matched the first, so the
+      // server's side showed a stale copy of a talent that had moved on.
+      const live = listTalents().filter((t) => talentFor(t.id) !== null);
       return send(200, JSON.stringify({
         marketplace: MARKETPLACE,
-        installedIds: listTalents().map((t) => t.id),
+        installedIds: live.map((t) => t.id),
         // The stored manifest is the SERVER's side — what it can do. Shown beside the
         // talent's own actions so the two halves of the protocol are visible as two.
-        installed: listTalents(),
+        installed: live,
       }));
     }
 
