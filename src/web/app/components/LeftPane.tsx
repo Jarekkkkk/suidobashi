@@ -84,7 +84,7 @@ function Pill({ tone, children }: { tone: 'muted' | 'chain' | 'advisory'; childr
 }
 
 export function LeftPane({ events, say, onTerms }: { events: Event[]; say: Say; onTerms: OnTerms }) {
-  const [tab, setTab] = useState<'agents' | 'outstanding' | 'vault'>('agents');
+  const [tab, setTab] = useState<'talents' | 'notifications'>('talents');
   const [out, setOut] = useState<Outstanding | null>(null);
   const [hires, setHires] = useState<Hire[] | null>(null);
   const [busy, setBusy] = useState(false);
@@ -215,9 +215,8 @@ export function LeftPane({ events, say, onTerms }: { events: Event[]; say: Say; 
       {/* A plain tab strip rather than the shadcn Tabs component: two tabs, no keyboard
           roving, and vendoring Radix for this would be more code than it replaces. */}
       <div className="flex shrink-0 items-center gap-1 border-b border-border px-3 py-2">
-        <Tab active={tab === 'agents'} onClick={() => setTab('agents')}>agents</Tab>
-        <Tab active={tab === 'vault'} onClick={() => setTab('vault')}>vault</Tab>
-        <Tab active={tab === 'outstanding'} onClick={() => setTab('outstanding')}>
+        <Tab active={tab === 'talents'} onClick={() => setTab('talents')}>talents</Tab>
+        <Tab active={tab === 'notifications'} onClick={() => setTab('notifications')}>
           outstanding
           {outstanding.length > 0 && (
             <span className="ml-1.5 rounded-full bg-warning/20 px-1.5 text-[10px] text-advisory">
@@ -234,8 +233,30 @@ export function LeftPane({ events, say, onTerms }: { events: Event[]; say: Say; 
       )}
 
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
-        {tab === 'agents' && (
-          <ul className="flex flex-col gap-2">
+        {tab === 'talents' && (
+          <div className="flex flex-col gap-3">
+            {/*
+              WHAT THIS TAB SHOWS, and the distinction is worth stating rather than implying.
+
+              A TALENT is a capability — the swap server is one. A GRANT is the on-chain
+              permission a talent needs in order to spend. They are different things, and this
+              list is the second: a talent that only reads needs no grant at all, which is why
+              the query talent you described will not appear here.
+
+              Calling these rows "talents" would be the same mistake as calling them "hires" —
+              a name that describes something else and leaves the user to work out what.
+            */}
+            <div>
+              <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                grants
+              </div>
+              <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground/60">
+                On-chain permissions. A talent that spends needs one; a talent that only reads
+                does not.
+              </p>
+            </div>
+
+            <ul className="flex flex-col gap-2">
             {(hires ?? []).map((h) => (
               <li
                 key={h.name}
@@ -264,7 +285,7 @@ export function LeftPane({ events, say, onTerms }: { events: Event[]; say: Say; 
                   />
                   <ActionForm
                     label="swap pool" busy={busy} runLabel="allow"
-                    fields={[{ key: 'venue', label: 'pool', placeholder: '0x…', width: 'lg' }]}
+                    fields={[{ key: 'venue', label: 'pool id', placeholder: '0x…', width: 'lg' }]}
                     onRun={(v) => run('venue', { hire: h.name, ...v, allow: 'true' })}
                   />
                   <ActionForm
@@ -292,68 +313,11 @@ export function LeftPane({ events, say, onTerms }: { events: Event[]; say: Say; 
             {hires === null && !note && (
               <li className="px-1 text-[12px] text-muted-foreground">reading…</li>
             )}
-          </ul>
-        )}
-
-        {tab === 'vault' && (
-          <div className="flex flex-col gap-4">
-            {/* The vault is where a swap USED to draw from. The escrow path replaced it, so it
-                is empty and stays empty — but withdraw is the route back to custody and the
-                step that must happen before a package upgrade, so it belongs on screen. */}
-            <section className="flex flex-col gap-1.5">
-              <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                vault
-              </div>
-              <ActionForm
-                label="fund it" busy={busy} runLabel="sign"
-                fields={[{ key: 'amountMist', label: 'SUI', placeholder: '0.5', width: 'sm' }]}
-                onRun={(v) => run('topup', v)}
-              />
-              <ActionForm
-                label="withdraw everything" busy={busy} runLabel="sign" danger
-                fields={[]}
-                onRun={() => run('withdraw', {})}
-              />
-            </section>
-
-            {/* The position cycle. ORDER MATTERS and it is open, fund, rebalance, exit — a
-                rebalance refuses an empty position with ENoLiquidity, and an exit is terminal
-                for that guard, so anything after it needs a fresh open. */}
-            <section className="flex flex-col gap-1.5">
-              <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                position
-              </div>
-              <ActionForm
-                label="open a guarded position" busy={busy} runLabel="sign"
-                fields={[]}
-                onRun={() => run('position', {})}
-              />
-              <ActionForm
-                label="fund it" busy={busy} runLabel="sign"
-                fields={[
-                  { key: 'fixAmountUsdc', label: 'USDC', placeholder: '0.5', width: 'sm' },
-                  { key: 'supplySui', label: 'SUI headroom', placeholder: '0.6', width: 'sm' },
-                ]}
-                onRun={(v) => run('deposit', v)}
-              />
-              <ActionForm
-                label="rebalance into a range" busy={busy} runLabel="sign"
-                fields={[
-                  { key: 'tickLower', label: 'lower', placeholder: '68800', width: 'sm' },
-                  { key: 'tickUpper', label: 'upper', placeholder: '69200', width: 'sm' },
-                ]}
-                onRun={(v) => run('rebalance', v)}
-              />
-              <ActionForm
-                label="exit the position" busy={busy} runLabel="sign" danger
-                fields={[]}
-                onRun={() => run('redeem', {})}
-              />
-            </section>
+            </ul>
           </div>
         )}
 
-        {tab === 'outstanding' && (
+        {tab === 'notifications' && (
           <>
             {out && outstanding.length === 0 && (
               <div className="rounded-lg border border-dashed border-border px-3 py-6 text-center">
