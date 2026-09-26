@@ -14,6 +14,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { wallet, short } from '@/lib/wallet';
 import type { Event } from '@/lib/api';
 import { Chat } from '@/components/Chat';
+import { LeftPane } from '@/components/LeftPane';
 import { SigningPane } from '@/components/SigningPane';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -85,12 +86,9 @@ function App() {
       'grid h-full',
       'grid-cols-1 md:grid-cols-[240px_1fr] xl:grid-cols-[240px_1fr_400px]',
     )}>
-      {/* Left — the marketplace. Published tools and installed ones. */}
-      <aside className="hidden border-r border-white/10 p-4 md:block">
-        <div className="text-xs uppercase tracking-wider text-white/40">agents</div>
-        <p className="mt-3 text-sm text-white/50">
-          Published and installed tools will list here.
-        </p>
+      {/* Left — what is installed, and what is left over. */}
+      <aside className="hidden overflow-hidden border-r border-white/10 md:block">
+        <LeftPane say={say} onTerms={setTerms} />
       </aside>
 
       {/* Centre — the chat. */}
