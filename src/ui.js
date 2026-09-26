@@ -158,6 +158,11 @@ function buildWalletBundle() {
 }
 
 /** Run the CLI with an argv array and no shell, so text cannot be interpolated. */
+/**
+ * @param {string} text
+ * @param {string[]} [extra]
+ * @returns {{ stdout: string, stderr: string, status: number }}
+ */
 function runAgent(text, extra = []) {
   const r = spawnSync('node', ['src/agent.js', text, ...extra], {
     encoding: 'utf-8',
@@ -218,6 +223,15 @@ function prunePending() {
 }
 
 /** First complete JSON document on stdout — agent.js may print more than one. */
+/**
+ * The first JSON document in a script's stdout, or null.
+ *
+ * Some scripts print two: the proposal and then a summary. Shrinking from the end rather
+ * than parsing greedily is what makes the FIRST one win, which is the one callers want.
+ *
+ * @param {string} stdout
+ * @returns {any}
+ */
 function firstJson(stdout) {
   const s = stdout || '';
   const start = s.indexOf('{');
@@ -265,6 +279,13 @@ function firstJson(stdout) {
  *
  * Returns null when the fee leaves no room — that is a real answer, not a failure to quote.
  */
+/**
+ * The floor for an escrowed order, from a live quote.
+ *
+ * @param {bigint} amountMist
+ * @param {bigint} feeOut
+ * @returns {bigint | null}
+ */
 function quoteMinOut(amountMist, feeOut) {
   const r = spawnSync('node', ['src/advisor.js', String(amountMist)], {
     encoding: 'utf-8', timeout: 60_000,
@@ -292,6 +313,9 @@ function quoteMinOut(amountMist, feeOut) {
  *
  * Empty string is treated as absent rather than as zero, for the same reason: a blank
  * input field is not a typed zero.
+ *
+ * @param {unknown} v
+ * @returns {bigint | null}
  */
 function toMist(v) {
   if (v === undefined || v === null) return null;
@@ -319,6 +343,18 @@ const GUARD_MAX_WIDTH = 2_000;
  * The browser names an *action*, never a script or an amount: a swap's plan comes
  * from re-deriving it here off the user's own words, so a tampered page cannot ask
  * for a different amount, policy or venue than the gate approved.
+ */
+/**
+ * Turn a request into a script to run, or into a refusal.
+ *
+ * THE CENTRAL DISPATCHER. Every action the server can build is a branch here, and each one
+ * returns the same three things: a script, its environment, and a proposal describing what
+ * is about to be signed. The proposal is what the signing pane shows BEFORE the wallet is
+ * asked, so it is a user-facing contract and not a debug aid.
+ *
+ * @param {string} kind
+ * @param {Record<string, any>} body
+ * @returns {{ script?: string, env?: Record<string, string>, proposal?: Record<string, unknown>, error?: string, refused?: unknown }}
  */
 function actionFor(kind, body) {
   if (kind === 'swap') {
@@ -836,6 +872,10 @@ function findCreatedOrder(digest) {
  * Build the transaction and hold the bytes. No key, no signature, no submission —
  * `tx.build({ client })` runs a resolution pass that simulates, so a doomed
  * transaction fails here rather than after the user has approved it.
+ *
+ * @param {string} kind
+ * @param {Record<string, any>} body
+ * @returns {{ id?: string, bytes?: string, proposal?: Record<string, unknown>, error?: string, refused?: unknown }}
  */
 function build(kind, body) {
   const a = actionFor(kind, body);
@@ -883,6 +923,10 @@ function build(kind, body) {
  *
  * `execute-signed-tx` cannot sign anything — it submits already-signed bytes. So
  * the process that runs it holds no key.
+ *
+ * @param {string} id
+ * @param {string} signature
+ * @returns {{ digest?: string, status?: string, output?: string, guard?: unknown, error?: string }}
  */
 function submit(id, signature) {
   const entry = pending.get(id);

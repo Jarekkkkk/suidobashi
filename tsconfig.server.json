@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "checkJs": true, "types": ["node"], "noEmit": true },
+  "include": ["src/ui.js"]
+}
