@@ -164,7 +164,7 @@ function buildWalletBundle() {
  * @returns {{ stdout: string, stderr: string, status: number }}
  */
 function runAgent(text, extra = []) {
-  const r = spawnSync('node', ['src/agent.js', text, ...extra], {
+  const r = spawnSync(RUNTIME, ['src/agent.js', text, ...extra], {
     encoding: 'utf-8',
     timeout: 300_000,
   });
@@ -297,7 +297,7 @@ function firstJson(stdout) {
  * @returns {bigint | null}
  */
 function quoteMinOut(amountMist, feeOut) {
-  const r = spawnSync('node', ['src/advisor.js', String(amountMist)], {
+  const r = spawnSync(RUNTIME, ['src/advisor.js', String(amountMist)], {
     encoding: 'utf-8', timeout: 60_000,
   });
   const doc = firstJson(r.stdout);
@@ -307,6 +307,18 @@ function quoteMinOut(amountMist, feeOut) {
   const floor = (out * (10_000n - SLIPPAGE_BPS)) / 10_000n;
   return floor > feeOut ? floor - feeOut : null;
 }
+
+/**
+ * The runtime every script is run with.
+ *
+ * ONE PLACE, so a file can convert to TypeScript on its own. bun runs both .js and .ts, which
+ * is what makes the migration incremental — the alternative was converting thirty files at once
+ * or keeping a runtime prefix in every script string, where a single missed one would fail at
+ * the moment a user clicked something.
+ *
+ * Overridable so the server can be run under node again while something is being debugged.
+ */
+const RUNTIME = process.env.SUI_RUNTIME || 'bun';
 
 /**
  * Parse a decimal string of base units, or null if it is not one.
@@ -378,7 +390,7 @@ function actionFor(kind, body) {
   if (kind === 'suspend') {
     if (!body.hire || !(body.hire in HIRES)) return { error: 'unknown hire' };
     return {
-      script: 'node src/set-suspended.js',
+      script: 'src/set-suspended.js',
       env: { HIRE: body.hire, SUSPEND: body.suspended ? 'true' : 'false' },
       proposal: { action: body.suspended ? 'suspend' : 'resume', hire: body.hire },
     };
@@ -387,7 +399,7 @@ function actionFor(kind, body) {
     const mist = toMist(body.amountMist);
     if (mist === null || mist <= 0n) return { error: 'amountMist must be a positive integer' };
     return {
-      script: 'node src/topup-vault.js',
+      script: 'src/topup-vault.js',
       // SKIP_BUDGET: funding and granting are separate operations here, so the
       // vault figure changes without silently moving anyone's ceiling.
       env: { TOPUP_MIST: String(mist), SKIP_BUDGET: '1' },
@@ -399,7 +411,7 @@ function actionFor(kind, body) {
     const mist = toMist(body.amountMist);
     if (mist === null) return { error: 'amountMist must be a non-negative integer' };
     return {
-      script: 'node src/set-budget.js',
+      script: 'src/set-budget.js',
       env: { HIRE: body.hire, BUDGET_MIST: String(mist) },
       proposal: {
         action: 'set budget',
@@ -413,7 +425,7 @@ function actionFor(kind, body) {
     const venue = body.venue || HIRES[body.hire].venue.id;
     const allow = body.allow !== false;
     return {
-      script: 'node src/hire-agent.js --allowlist',
+      script: 'src/hire-agent.js --allowlist',
       env: { HIRE: body.hire, VENUE: venue, ALLOW: allow ? 'true' : 'false' },
       proposal: {
         action: allow ? 'allow swap pool' : 'block swap pool',
@@ -427,7 +439,7 @@ function actionFor(kind, body) {
     // is not predictable here — object::new runs on the validator — so it has to be
     // read back from the transaction afterwards. See NOTES on the position cycle.
     return {
-      script: 'node src/create-position.js',
+      script: 'src/create-position.js',
       env: {},
       proposal: { action: 'open a guarded position' },
     };
@@ -442,7 +454,7 @@ function actionFor(kind, body) {
     if (usdc > 10_000_000n) return { error: 'fixAmountUsdc above 10 USDC is not allowed here' };
     if (sui > 5_000_000_000n) return { error: 'supplySui above 5 SUI is not allowed here' };
     return {
-      script: 'node src/deposit-liquidity.js',
+      script: 'src/deposit-liquidity.js',
       // SUPPLY_SUI is headroom, not a spend: the module adds a fixed USDC amount and
       // routes whatever the SUI side does not consume back to the destination.
       env: {
@@ -471,7 +483,7 @@ function actionFor(kind, body) {
       };
     }
     return {
-      script: 'node src/rebalance.js',
+      script: 'src/rebalance.js',
       env: {
         NEW_TICK_LOWER: String(lo), NEW_TICK_UPPER: String(hi),
         GUARD_ID: activeGuard.id, GUARD_SHARED_VERSION: String(activeGuard.version),
@@ -481,7 +493,7 @@ function actionFor(kind, body) {
   }
   if (kind === 'redeem') {
     return {
-      script: 'node src/redeem.js',
+      script: 'src/redeem.js',
       env: { GUARD_ID: activeGuard.id, GUARD_SHARED_VERSION: String(activeGuard.version) },
       proposal: { action: 'exit the position' },
     };
@@ -495,7 +507,7 @@ function actionFor(kind, body) {
     // This is also the step that must happen BEFORE a package upgrade: an upgrade
     // replaces code, and the safe moment to change code is while the vault is empty.
     return {
-      script: 'node src/withdraw-vault.js',
+      script: 'src/withdraw-vault.js',
       env: {},
       proposal: { action: 'withdraw the whole vault', destination: DEPLOYER },
     };
@@ -513,7 +525,7 @@ function actionFor(kind, body) {
     if (bps > 500n) return { error: 'the policy refuses a bound above 500 bps' };
 
     return {
-      script: 'node src/hire-agent.js --repoint',
+      script: 'src/hire-agent.js --repoint',
       env: { HIRE: body.hire, AGENT: agent, BOUND_BPS: String(bps) },
       proposal: {
         action: 'hand the grant to a different agent, and bound its price',
@@ -587,7 +599,7 @@ function actionFor(kind, body) {
     if (amount > 10_000_000_000n) return { error: 'escrow above 10 SUI is not allowed here' };
 
     return {
-      script: 'node src/create-order.js',
+      script: 'src/create-order.js',
       // No TTL from the browser: the UI has no field for it, so the script's own default
       // applies — 60 seconds, set in create-order.js. (This comment said 24 hours, which
       // was never true; the TTL has always been a minute, and ORDER-ESCROW.md and
@@ -626,7 +638,7 @@ function actionFor(kind, body) {
       return { error: 'orderId must be a full 0x object id (64 hex characters)' };
     }
     return {
-      script: 'node src/refund-order.js',
+      script: 'src/refund-order.ts',
       env: { ORDER_ID: orderId },
       proposal: { action: 'revoke an expired order', orderId },
     };
@@ -640,7 +652,7 @@ function actionFor(kind, body) {
       return { error: 'orderId must be a full 0x object id (64 hex characters)' };
     }
     return {
-      script: 'node src/burn-order.js',
+      script: 'src/burn-order.js',
       env: { ORDER_ID: orderId },
       proposal: { action: 'reclaim a settled order\u2019s storage', orderId },
     };
@@ -944,8 +956,10 @@ function build(kind, body) {
   const a = actionFor(kind, body);
   if (a.error || a.refused) return a;
 
-  const [cmd, ...args] = a.script.split(/\s+/);
-  const built = spawnSync(cmd, [...args, '--emit-bytes'], {
+  // The script string names the FILE; the runtime is the constant above, so converting a file
+  // to .ts is a one-word edit here rather than a hunt through thirteen strings.
+  const args = a.script.split(/\s+/);
+  const built = spawnSync(RUNTIME, [...args, '--emit-bytes'], {
     env: { ...process.env, ...a.env },
     encoding: 'utf-8',
     timeout: 300_000,

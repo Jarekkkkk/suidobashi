@@ -114,8 +114,12 @@ async function main() {
 
   if (!EXECUTE) {
     const res = await client.simulateTransaction({ transaction: bytes });
-    const status = res?.Transaction?.status ?? res?.status ?? null;
-    const ok = status?.success === true || status?.status === 'success';
+    // The gRPC result nests the status under Transaction. The previous chain fell back to
+    // `res.status` and then tested `status.status`, and NEITHER EXISTS — so both were dead
+    // code that could never change the answer, in the branch that decides whether a refund is
+    // safe to attempt. TypeScript found them the moment this file became .ts.
+    const status = res?.Transaction?.status ?? null;
+    const ok = status?.success === true;
     const nowMs = Date.now();
     console.log(JSON.stringify({
       mode: 'dry-run',
@@ -134,6 +138,10 @@ async function main() {
     return;
   }
 
+  // `signer` is only constructed on the --execute path, so the compiler is right that it
+  // could be null here. Saying so explicitly is better than the alternative it was offered:
+  // the call would fail deeper in the SDK with something less legible.
+  if (!signer) throw new Error('no signer — this path requires --execute');
   const sent = await client.signAndExecuteTransaction({ transaction: bytes, signer });
   const result = sent?.Transaction ?? sent?.FailedTransaction ?? sent ?? {};
   console.log(JSON.stringify({

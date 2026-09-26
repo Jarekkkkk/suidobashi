@@ -1,5 +1,21 @@
 {
   "extends": "./tsconfig.json",
-  "compilerOptions": { "checkJs": true, "types": ["node"], "noEmit": true },
-  "include": ["src/ui.js"]
+  "compilerOptions": {
+    "checkJs": true,
+    "types": [
+      "node"
+    ],
+    "noEmit": true
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.js"
+  ],
+  "exclude": [
+    "src/verify-*.js",
+    "src/verify-*.ts",
+    "src/demo-*.js",
+    "src/web/page.js",
+    "src/web/markup.js"
+  ]
 }

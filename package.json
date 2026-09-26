@@ -4,15 +4,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "agent": "node src/agent.js",
+    "agent": "bun src/agent.js",
     "budget": "node src/set-budget.js",
     "build:app": "bun build src/web/app/main.tsx --outfile /tmp/app.js --format=esm --target=browser && bunx @tailwindcss/cli -i src/web/app/app.css -o /tmp/app.css",
     "hires": "node src/hire-agent.js",
     "qvac": "qvac serve openai",
     "test": "cd move && sui move test",
     "typecheck": "bunx tsc --noEmit",
-    "ui": "node src/ui.js",
-    "verify": "bunx tsc --noEmit && node src/verify-intent.js && node src/verify-page.js && node src/verify-guard.js && node src/verify-order.js"
+    "ui": "bun src/ui.js",
+    "verify": "bunx tsc --noEmit && bun src/verify-intent.js && bun src/verify-page.js && bun src/verify-guard.js && bun src/verify-order.js"
   },
   "dependencies": {
     "@cetusprotocol/aggregator-sdk": "^1.7.3",

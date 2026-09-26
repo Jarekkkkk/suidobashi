@@ -212,10 +212,11 @@ for (const k of new Set(emitted)) {
 //
 // Read from the source, like the event-kind check above, so a new script that forgets the flag
 // fails HERE rather than in someone's wallet.
-const scriptNames = [...serverSrc.matchAll(/script:\s*'node src\/([a-z0-9-]+\.js)/g)]
+const scriptNames = [...serverSrc.matchAll(/script:\s*'(?:node |bun )?src\/([a-z0-9-]+\.(?:js|ts))/g)]
   .map((m) => m[1]);
 check('the server runs at least one script', scriptNames.length > 0,
-  `found ${scriptNames.length} — the regex may have stopped matching`);
+  `found ${scriptNames.length} — the regex may have stopped matching. It has before: the script`
+  + ' strings lost their runtime prefix when the server moved to bun.');
 for (const name of new Set(scriptNames)) {
   let src = '';
   try {
