@@ -246,6 +246,28 @@ export function Chat({
           terminal: true,
           data: { digest, orderId },
         });
+      } else {
+        // The build was refused and did not throw, so signAndSubmit has already emitted the
+        // server's reason. This adds what that reason cannot know: that it is a TIMING
+        // outcome rather than a lost one.
+        //
+        // The build already retried on its own — eight attempts with a short backoff — so
+        // reaching here means the settlement stayed unreadable for several seconds. Rare,
+        // and not lost: the order is on chain and the storage is still the maker's.
+        //
+        // The message names WHERE to retry, because the chat cannot: the reclaim runs only
+        // as the tail of a fill, and a standing field here was removed as bad UI. Saying
+        // "retry it" without saying where would be a path that does not exist.
+        say({
+          kind: 'reclaim-pending',
+          source: 'pipeline',
+          text: 'the reclaim could not be built yet — the order is still on chain and its '
+            + 'storage is still yours, so nothing was lost. It can be burned from the '
+            + 'original page at / or with src/burn-order.js, using the id shown in the '
+            + 'signing pane.',
+          terminal: true,
+          data: { orderId },
+        });
       }
     } catch (e) {
       // A declined second signature is routine and must not undo the fill, which has

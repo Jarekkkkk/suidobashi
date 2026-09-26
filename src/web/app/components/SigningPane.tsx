@@ -141,9 +141,12 @@ export function SigningPane({
                 <dt className="shrink-0 text-white/40">{LABEL[k] ?? k}</dt>
                 <dd className={cn(
                   'ml-auto min-w-0 break-all text-right',
-                  k === 'orderId' ? 'font-mono text-xs text-white/60' : 'text-white/85',
+                  // NOT shortened. This is the one value a person may need to copy — an order
+                  // whose reclaim was refused is still on chain, and the id is how it is
+                  // retried. A truncated id looks tidy and is useless.
+                  k === 'orderId' ? 'font-mono text-[11px] text-white/60' : 'text-white/85',
                 )}>
-                  {k === 'orderId' ? short(String(v)) : `${String(v)}${UNIT[k] ?? ''}`}
+                  {String(v)}{UNIT[k] ?? ''}
                 </dd>
               </div>
             ))}

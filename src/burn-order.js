@@ -28,6 +28,7 @@
  */
 import 'dotenv/config';
 import { PACKAGE_LATEST_ID, SUI_TYPE, DEPLOYER } from './addresses.js';
+import { buildWithSettledRetry } from './settled-retry.js';
 
 const EMIT_BYTES = process.argv.includes('--emit-bytes');
 const EXECUTE = process.argv.includes('--execute');
@@ -75,15 +76,21 @@ async function main() {
 
   const sender = signer ? signer.toSuiAddress() : (process.env.SUI_SENDER || DEPLOYER);
 
-  const tx = new Transaction();
-  tx.setSender(sender);
-  tx.moveCall({
-    target: `${PACKAGE_LATEST_ID}::order::burn`,
-    typeArguments: [SUI_TYPE],
-    arguments: [tx.object(ORDER_ID)],
-  });
+  // A FRESH Transaction per attempt. `tx.object(id)` RESOLVES the shared object, and an
+  // instance that resolved against a stale view may keep what it resolved — so retrying the
+  // build on the same instance would retry the stale resolution and fail identically.
+  const buildBurn = async () => {
+    const tx = new Transaction();
+    tx.setSender(sender);
+    tx.moveCall({
+      target: `${PACKAGE_LATEST_ID}::order::burn`,
+      typeArguments: [SUI_TYPE],
+      arguments: [tx.object(ORDER_ID)],
+    });
+    return tx.build({ client });
+  };
 
-  const bytes = await tx.build({ client });
+  const bytes = await buildWithSettledRetry(buildBurn);
 
   if (EMIT_BYTES) {
     process.stdout.write(Buffer.from(bytes).toString('base64'));

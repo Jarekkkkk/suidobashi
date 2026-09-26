@@ -135,6 +135,36 @@ async function inspect(orderId) {
  * to this server, the rest to the maker. Nothing is held in between, which is why a
  * compromised server cannot skim: the output never passes through it.
  */
+/**
+ * Wait until the order READS as settled — its balance emptied — or give up.
+ *
+ * Polls the OBJECT rather than the transaction, because the object is what the next reader
+ * consults. This is the fix for a real failure: the burn was built moments after the fill
+ * returned, resolved the order against a node whose view had not caught up, and aborted with
+ * ENotSettled at the funds check — reading a pre-settlement version. The swap had filled and
+ * the money had moved; only the cleanup was early.
+ *
+ * "Executed" and "visible to the next reader" are different claims, and the reclaim acts on
+ * the second. Returning only after the first is what made the race possible.
+ *
+ * A timeout is NOT a failure. The settlement has landed either way, and the retry on the
+ * burn's build covers a reader still behind.
+ */
+async function waitUntilSettled(client, orderId, tries = 12) {
+  for (let i = 0; i < tries; i++) {
+    try {
+      const o = await client.getObject({ objectId: orderId, include: { json: true } });
+      const funds = (o.object ?? o).json?.funds;
+      // A settled order has its balance emptied by `split`, so this reads as 0. Absent is
+      // NOT settled — that would be reading the wrong thing, which is the mistake that has
+      // already caused three bugs here.
+      if (funds !== undefined && String(funds) === '0') return true;
+    } catch { /* a transient read failure is the same as not-yet-visible */ }
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  return false;
+}
+
 async function fill(orderId) {
   const seen = await inspect(orderId);
   if (!seen.ok) return { filled: false, ...seen };
@@ -183,6 +213,11 @@ async function fill(orderId) {
   const sent = await c.signAndExecuteTransaction({ transaction: bytes, signer });
   // A failed transaction comes back under FailedTransaction, not Transaction.
   const result = sent?.Transaction ?? sent?.FailedTransaction ?? sent ?? {};
+
+  // Confirm the settlement is READABLE before reporting it, so a caller acting on it
+  // immediately is not racing a node's view.
+  if (result.status?.success === true) await waitUntilSettled(c, orderId);
+
   return {
     filled: result.status?.success === true,
     digest: result.digest ?? null,
