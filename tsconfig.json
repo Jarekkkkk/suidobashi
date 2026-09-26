@@ -10,9 +10,10 @@
     "skipLibCheck": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
+    "allowJs": true,
     "paths": {
       "@/*": ["./src/web/app/*"]
     }
   },
-  "include": ["src/web/app/**/*"]
+  "include": ["src/web/app/**/*", "src/web/units.js"]
 }

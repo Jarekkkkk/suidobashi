@@ -58,8 +58,11 @@ export type SubmitResult = {
   events?: Event[];
 };
 
-/** Format an integer string of base units as a decimal, without floating point. */
-export function units(raw: string | number | undefined, decimals: number): string {
-  const s = String(raw ?? '0').padStart(decimals + 1, '0');
-  return `${s.slice(0, -decimals)}.${s.slice(-decimals)}`;
-}
+/**
+ * Amount formatting lives in src/web/units.js — the same module the CLI scripts use.
+ *
+ * It used to live here too, which is how the same fee printed as "0.01" in a refusal and
+ * "0.010000" in the chat: two implementations, two spellings, one value. Re-exported rather
+ * than reimplemented, so there is still one place to change and no second copy to drift.
+ */
+export { fromUnits } from '../../units.js';

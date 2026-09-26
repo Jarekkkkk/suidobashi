@@ -1,10 +1,19 @@
 /*
  * Amount conversion, both directions, in exact integers.
  *
- * Pure and DOM-free so it can be tested on its own (see src/verify-page.js), and shared
- * beyond the page: the scripts that talk to a person import the reverse formatter below,
- * because a message reading "cannot swap 10000000" is a correct number in a unit nobody
- * reads.
+ * Pure and DOM-free so it can be tested on its own (see src/verify-page.js), and shared by
+ * everything that shows an amount to a person: the page, the React app, and the CLI scripts
+ * that talk to an operator. A message reading "cannot swap 10000000" is a correct number in
+ * a unit nobody reads.
+ *
+ * ONE FORMATTER, ON PURPOSE. The React app briefly had its own, which printed a fee of
+ * "0.010000" while these printed "0.01" — the same value, two spellings, because a second
+ * implementation appeared next to the first. Anything here that displays money imports this
+ * file; there is no second copy to drift.
+ *
+ * It is plain JavaScript and the app is TypeScript, which is why tsconfig sets allowJs:
+ * TypeScript reads it for its shape without type-checking a module that was never written
+ * under strict rules. That is a deliberate trade, not an oversight.
  *
  * This matters more than it looks: the forward parser is what turns what someone typed
  * into the integer a chain transaction will carry, and it is the piece that silently

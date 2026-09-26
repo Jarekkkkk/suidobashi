@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { api, units, type Event, type BuildResult, type SubmitResult } from '@/lib/api';
-import { wallet, short } from '@/lib/wallet';
+import { api, fromUnits, type Event, type BuildResult, type SubmitResult } from '@/lib/api';
+import { wallet } from '@/lib/wallet';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -35,14 +35,12 @@ const SOURCE_STYLE: Record<Event['source'], string> = {
  * belongs here, at the last moment before display, and it is the reason a fee once
  * rendered as "fee 10000 to the filler": the number was right and the units were not.
  */
-const usdc = (raw: string | number | undefined) => `${units(raw, 6)} USDC`;
+const usdc = (raw: string | number | undefined) => `${fromUnits(raw, 6)} USDC`;
 
 export function Chat({ address }: { address: string | null }) {
   const [text, setText] = useState('');
   const [events, setEvents] = useState<Event[]>([]);
   const [busy, setBusy] = useState(false);
-  // The id of a settled order whose storage is still on chain, waiting for the maker.
-  const [reclaimable, setReclaimable] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
   // Keep the newest line in view. The pipeline narrates as it goes, so the interesting
@@ -95,7 +93,6 @@ export function Chat({ address }: { address: string | null }) {
     if (!request || busy) return;
     setBusy(true);
     setText('');
-    setReclaimable(null);
     say({ kind: 'ask', source: 'pipeline', text: request, terminal: false });
 
     try {
@@ -172,10 +169,17 @@ export function Chat({ address }: { address: string | null }) {
       }
 
       // A settled order stays on chain, and its storage rebate goes to whoever signs the
-      // burn — so leaving it alive is what lets the MAKER reclaim it rather than the
-      // server that filled it. That is the whole reason `burn` is maker-gated. Offer it
-      // now, while the id is in hand; the user decides when to spend the signature.
-      if (f.filled && f.orderId) setReclaimable(f.orderId);
+      // burn — so leaving it alive is what lets the MAKER reclaim it rather than the server
+      // that filled it. That is the whole reason `burn` is maker-gated.
+      //
+      // Reclaimed AUTOMATICALLY, as the tail of this flow rather than a button. There is
+      // nothing to weigh: it is a net gain of ~0.0041 SUI every time, and asking the user
+      // to authorise something that is always correct is a worse interface than just doing
+      // it. The wallet pops a second signature, the same as the first.
+      //
+      // Only after a FILL. An unfilled order has not expired, so `burn` would refuse it and
+      // the refusal would be guaranteed rather than informative.
+      if (f.filled && f.orderId) await reclaim(f.orderId);
     } catch (e) {
       // A rejected signature is routine — the user may simply have declined. It is
       // worded as an ending rather than an error, matching the server's vocabulary.
@@ -193,15 +197,15 @@ export function Chat({ address }: { address: string | null }) {
   /**
    * Reclaim a settled order's storage.
    *
-   * This is the step that pays the user rather than costing them: the burn's gas is
-   * ~0.0003 SUI and the rebate is ~0.0044 SUI measured, so it nets about +0.0041. It
-   * needs the MAKER's signature because `order::burn` asserts the caller is the maker —
-   * a stranger cannot take the rebate, and neither can we.
+   * This is the step that pays the user rather than costing them: measured on mainnet, the
+   * burn's gas is ~0.0001 SUI and the rebate is ~0.0042, so it nets about +0.0041. It needs
+   * the MAKER's signature because `order::burn` asserts the caller is the maker — a stranger
+   * cannot take the rebate, and neither can we.
+   *
+   * No busy handling of its own: it is called from inside the flow, which already owns that
+   * state. The guard it used to carry was for the button, and the button is gone.
    */
   async function reclaim(orderId: string) {
-    if (busy) return;
-    setBusy(true);
-    setReclaimable(null);
     say({
       kind: 'reclaiming',
       source: 'pipeline',
@@ -214,20 +218,21 @@ export function Chat({ address }: { address: string | null }) {
         say({
           kind: 'reclaimed',
           source: 'chain',
-          text: `reclaimed — ${digest} · about 0.0044 SUI of storage back`,
+          text: `reclaimed — ${digest} · about 0.0042 SUI of storage back`,
           terminal: true,
           data: { digest, orderId },
         });
       }
     } catch (e) {
+      // A declined second signature is routine and must not undo the fill, which has
+      // already landed. The order stays on chain and can still be reclaimed later.
       say({
         kind: 'ended',
         source: 'pipeline',
-        text: `ended: ${e instanceof Error ? e.message : String(e)}`,
+        text: `the reclaim was not signed: ${e instanceof Error ? e.message : String(e)}. `
+          + 'The order is still on chain and can be reclaimed later.',
         terminal: true,
       });
-    } finally {
-      setBusy(false);
     }
   }
 
@@ -252,32 +257,6 @@ export function Chat({ address }: { address: string | null }) {
         {busy && <p className="text-sm text-white/40">working…</p>}
         <div ref={endRef} />
       </div>
-
-      {/*
-        Offered ONLY after a fill, never as a standing form.
-
-        A permanent order-id field in a chat is the wrong shape: it is a low-frequency,
-        expert action, and it sat between the conversation and the message box asking to be
-        filled in. It also read as a required step rather than an optional cleanup.
-
-        The one moment reclaiming is relevant is right after an order settles, when the id
-        is already known — so that is the only moment it appears. Reclaiming an OLDER order
-        still has a home: the original page at / keeps its burn field, which is where an
-        owner-level action belongs.
-      */}
-      {reclaimable && (
-        <div className="flex items-center gap-3 border-t border-white/10 bg-white/[0.02] px-4 py-2">
-          <span className="min-w-0 text-xs text-white/50">
-            order <span className="font-mono">{short(reclaimable)}</span> is settled — its
-            storage is still yours to reclaim, about +0.0041 SUI.
-          </span>
-          <Button size="sm" variant="outline" className="ml-auto shrink-0"
-            disabled={busy}
-            onClick={() => void reclaim(reclaimable)}>
-            reclaim
-          </Button>
-        </div>
-      )}
 
       <div className="flex gap-2 border-t border-white/10 p-3">
         <Input
