@@ -37,7 +37,7 @@ const DECIMAL = /^[0-9]+([.][0-9]+)?$/;
  * Not a style choice: code written with the backslash forms silently lost them when
  * it lived in a template literal, and the pattern then matched nothing useful.
  */
-export function toUnits(text, decimals) {
+export function toUnits(text: unknown, decimals: number): string | null {
   const t = String(text ?? '').trim();
   if (!DECIMAL.test(t)) return null;
 
@@ -52,10 +52,10 @@ export function toUnits(text, decimals) {
 }
 
 /** SUI as typed by a person -> MIST. */
-export const suiToMist = (text) => toUnits(text, SUI_DECIMALS);
+export const suiToMist = (text: unknown): string | null => toUnits(text, SUI_DECIMALS);
 
 /** USDC as typed by a person -> 6-decimal units. */
-export const usdcToUnits = (text) => toUnits(text, USDC_DECIMALS);
+export const usdcToUnits = (text: unknown): string | null => toUnits(text, USDC_DECIMALS);
 
 /**
  * Integer units -> a decimal string. The reverse of `toUnits`, and exact for the same
@@ -65,7 +65,7 @@ export const usdcToUnits = (text) => toUnits(text, USDC_DECIMALS);
  * keeps carrying the integer — this exists so a person reading a refusal sees "0.01"
  * rather than "10000", which is a number in a unit they do not have in their head.
  */
-export function fromUnits(raw, decimals) {
+export function fromUnits(raw: unknown, decimals: number): string {
   const s = String(raw ?? '0').replace('-', '').padStart(decimals + 1, '0');
   const whole = s.slice(0, -decimals);
   const frac = s.slice(-decimals).replace(/0+$/, '');
@@ -73,7 +73,7 @@ export function fromUnits(raw, decimals) {
 }
 
 /** MIST -> a decimal string, for messages. */
-export const mistToSui = (raw) => fromUnits(raw, SUI_DECIMALS);
+export const mistToSui = (raw: unknown): string => fromUnits(raw, SUI_DECIMALS);
 
 /** 6-decimal USDC units -> a decimal string, for messages. */
-export const unitsToUsdc = (raw) => fromUnits(raw, USDC_DECIMALS);
+export const unitsToUsdc = (raw: unknown): string => fromUnits(raw, USDC_DECIMALS);

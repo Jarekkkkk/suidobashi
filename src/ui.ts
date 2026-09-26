@@ -133,14 +133,14 @@ const APP_PAGE = `<!doctype html>
  *
  * Generated rather than committed: 850 KB of transpiled libraries does not belong
  * in the tree, and building at start means it can never be stale relative to
- * src/web/wallet-entry.js. Written to a temp path outside the project so it is
+ * src/web/wallet-entry.ts. Written to a temp path outside the project so it is
  * never mistaken for source, then removed.
  */
 function buildWalletBundle() {
   const out = path.join(os.tmpdir(), `agent-wallet-bundle-${process.pid}.js`);
   const r = spawnSync(
     'bun',
-    ['build', 'src/web/wallet-entry.js', '--outfile', out, '--format=esm', '--target=browser'],
+    ['build', 'src/web/wallet-entry.ts', '--outfile', out, '--format=esm', '--target=browser'],
     { encoding: 'utf-8', timeout: 120_000 },
   );
   if (r.status !== 0) {
@@ -1346,7 +1346,7 @@ const server = http.createServer((req, res) => {
   // Indexed by a request path, so it needs a signature: without one TypeScript treats the
   // literal's keys as the only valid ones, which is right for the four routes that exist and
   // wrong for the lookup that decides whether a path IS one of them.
-  const moduleRoutes: Record<string, string> = { '/page.js': 'page.js', '/markup.js': 'markup.js', '/units.js': 'units.js', '/events.js': 'events.js' };
+  const moduleRoutes: Record<string, string> = { '/page.js': 'page.js', '/markup.js': 'markup.js', '/units.js': 'units.ts', '/events.js': 'events.ts' };
   // `req.url` is optional on the request type, so it is defaulted rather than asserted: an
   // absent url should miss every route, which is what an empty string does.
   const url = req.url ?? '';

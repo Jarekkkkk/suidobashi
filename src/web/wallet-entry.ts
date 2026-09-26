@@ -1,3 +1,17 @@
+/** The bridge this bundle installs. Declared so the app can be typed against it. */
+declare global {
+  interface Window {
+    agentWallet?: {
+      listWallets(): { name: string }[];
+      connect(name?: string): Promise<string>;
+      disconnect(): Promise<void>;
+      address(): string | null;
+      onChange(cb: (address: string | null) => void): () => void;
+      sign(txBytesBase64: string): Promise<{ signature: string }>;
+    };
+  }
+}
+
 /* The browser side of signing.
  *
  * Exposed to the page as `window.agentWallet`. Deliberately narrow: list wallets,
@@ -42,7 +56,7 @@ window.agentWallet = {
   },
 
   /** Ask a wallet to connect. Returns the authorised address, or throws. */
-  async connect(name) {
+  async connect(name?: string) {
     const wallets = dAppKit.stores.$wallets.get();
     const wallet = name
       ? wallets.find((w) => String(w.name).toLowerCase().includes(String(name).toLowerCase()))
@@ -64,7 +78,7 @@ window.agentWallet = {
   address: currentAddress,
 
   /** Subscribe to connection changes. Returns an unsubscribe function. */
-  onChange(cb) {
+  onChange(cb: (address: string | null) => void) {
     return dAppKit.stores.$connection.subscribe((c) => {
       cb(c?.isConnected ? c.account.address : null);
     });
@@ -75,7 +89,7 @@ window.agentWallet = {
    * keeps the bytes and submits them itself, so the browser cannot substitute a
    * different transaction.
    */
-  async sign(txBytesBase64) {
+  async sign(txBytesBase64: string) {
     if (!currentAddress()) throw new Error('no wallet connected');
 
     // THE ACCOUNT MUST STILL EXIST IN THE WALLET, not merely in the connection.

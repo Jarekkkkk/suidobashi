@@ -21,7 +21,13 @@
  */
 
 /** The closed set. Adding one is a deliberate act, not an inline string somewhere. */
-export const EVENT_KINDS = [
+export type EventKind =
+  | 'extracting' | 'proposed' | 'refused' | 'building' | 'awaiting-signature'
+  | 'submitting' | 'notified' | 'filling' | 'filled' | 'expired' | 'revoking' | 'revoked';
+
+export type EventSource = 'model' | 'pipeline' | 'chain';
+
+export const EVENT_KINDS: EventKind[] = [
   'extracting',          // the local model is running
   'proposed',            // the deterministic gate allowed it
   'refused',             // the gate declined it, with a reason
@@ -36,7 +42,7 @@ export const EVENT_KINDS = [
   'revoked',             // the escrow is back with the maker
 ];
 
-export const SOURCES = ['model', 'pipeline', 'chain'];
+export const SOURCES: EventSource[] = ['model', 'pipeline', 'chain'];
 
 /** Kinds after which the flow has stopped and no further event will follow. */
 export const TERMINAL_KINDS = ['refused', 'filled', 'expired', 'revoked'];
@@ -45,7 +51,8 @@ export const TERMINAL_KINDS = ['refused', 'filled', 'expired', 'revoked'];
  * Build one event. Throws on an unknown kind or source rather than emitting something
  * the client will not know how to render — a typo should fail here, not in a browser.
  */
-export function event(kind, source, text, data = null) {
+export function event(kind: EventKind, source: EventSource, text: string,
+  data: Record<string, unknown> | null = null) {
   if (!EVENT_KINDS.includes(kind)) throw new Error(`unknown event kind "${kind}"`);
   if (!SOURCES.includes(source)) throw new Error(`unknown event source "${source}"`);
   return { kind, source, text, terminal: TERMINAL_KINDS.includes(kind), ...(data ? { data } : {}) };
@@ -59,7 +66,14 @@ export function event(kind, source, text, data = null) {
  * either way. Words like "failed" or "error" would be wrong about what happened and
  * would train the user to distrust a system that is working.
  */
-const ENDING = {
+/**
+ * What an ending may name. Only two fields are ever read across every ending, so the type says
+ * that rather than accepting anything — `Record<string, any>` would compile and give every
+ * caller no contract, which is the same objection as `any` anywhere else.
+ */
+export type EndingDetail = { reason?: string; received?: string };
+
+const ENDING: Record<string, (d: EndingDetail) => string> = {
   filled: (d) => `filled — you received ${d.received}`,
   expired: () => 'the window closed before anyone filled it, and your escrow came back',
   // "Revoked", not "refunded". A refund reads as paying someone out; this is the maker taking
@@ -71,6 +85,6 @@ const ENDING = {
 };
 
 /** The wording for a terminal kind, or null if the kind does not end a flow. */
-export function endingFor(kind, data = {}) {
+export function endingFor(kind: EventKind, data: EndingDetail = {}): string | null {
   return typeof ENDING[kind] === 'function' ? ENDING[kind](data) : null;
 }
