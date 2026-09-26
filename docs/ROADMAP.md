@@ -104,8 +104,34 @@ the single field that can pass every gate and still extract value.
 
 ### Phase 7 — UI
 
-**Status: not started.**
+**Status: in progress.** The React rewrite is scaffolded and the core loop runs: wallet
+connect, the chat's escrow path, and the automatic reclaim. Served at `/app` while the
+original page stays at `/` as the reference the port is checked against.
 
+- [x] React + TypeScript + Tailwind + shadcn. `bun build` plus the Tailwind CLI, both
+      served from memory at startup the same way the wallet bundle is.
+- [x] The wallet bridge, typed, with the app waiting for it rather than assuming script
+      order — a change to the page shell cannot silently break signing.
+- [x] The chat: propose → build → sign → submit, written out as four steps rather than
+      collapsed. The server never holds a key and the browser never chooses the
+      transaction.
+- [x] The **escrow path**: the chat builds an ORDER, not a vault swap. The amount is read
+      from the agent and the floor derived from a live quote, with the fee taken out of
+      the same slippage budget.
+- [x] The **reclaim**, automatic after a fill. A settled order stays on chain so the
+      storage rebate reaches the maker rather than the settler.
+- [ ] **The right pane** — the current step and the terms being signed. The events already
+      carry `source` and `data`, so this is rendering rather than plumbing. The point of
+      the pane is that a claim of success and a chain-read fact must not look alike.
+- [ ] **An "outstanding" tab** in the left pane, alongside agents: settled-but-unburned,
+      expired-but-unrevoked, and unfilled orders, each with its action. This is where
+      "notified, not watching" gets an honest answer — something has to watch, and it
+      should be the user with a place that shows them. **Discovery is proven:**
+      `listTransactions({ filter: { sender } })` honours its filter and validates it,
+      unlike `listEvents`. It is a chain read, so it is a snapshot and should say when it
+      last checked.
+- [ ] Port the remaining flows: the order form, owner actions, hires, stats.
+- [ ] Delete the original page once nothing is left to compare against.
 - [ ] Decide React-in-page against **one** swap template, so the rewrite is
       contained. OpenUI Lang is the intended format for the UI standard.
 - [ ] Fix the component vocabulary and the trust rule together: allowlisted
@@ -130,6 +156,27 @@ Recorded so they are not rediscovered as if new.
 | **agent rewards / fees** | new Move + design | needs the destination-invariant question answered first |
 | **cron / interval execution** | agent key signing | after the swap path is solid — this is what forces limits on chain |
 | the **second strategy** | config | when the first is proven end to end |
+| rename **`refund` → `revoke`** | Move + scripts + UI | the next Move change that batches in. "Refund" reads as paying someone out; it is taking your own escrow back, and `revoke` says so. Avoids colliding with `reclaim`, which is the burn |
+
+**`revoke` should NOT become maker-only.** Raised as a preference and rejected on the
+merits, recorded here so it is not re-litigated by someone who has not seen the reasoning.
+The current rule is *anyone may call it, funds always go to the maker*, and that is strictly
+stronger than maker-only:
+
+```text
+maker-only     lose the key → lose the money, permanently
+               the maker must remember, forever
+               this is exactly the babysitting the notification pane exists to avoid
+
+as-is          the maker can revoke
+               anyone can help, and is paid the storage rebate to do it
+               nobody can redirect a cent — the destination is fixed at create
+```
+
+The worry that motivates maker-only does not hold either: `ENotExpired` already blocks any
+call before the deadline, so a stranger cannot pull an order out from under a live fill.
+Maker-only would remove a safety property and add a permanent-lockup failure mode in
+exchange for nothing.
 
 ## Open questions for the owner
 

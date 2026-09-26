@@ -363,6 +363,35 @@ it fails with *"transaction data was not sufficient to build offline"*. Read the
 shared version and reference it explicitly. That also removes a lookup from the normal
 path.
 
+**`listEvents` ignores every filter; `listTransactions` honours one — and says so.**
+
+`listEvents` silently returns everything regardless of filter shape, which is why this
+project concluded it was "notified, not watching" and gave up on discovering orders. That
+conclusion was drawn from the WRONG METHOD. `listTransactions` accepts a filter and
+**validates** it:
+
+```js
+await client.listTransactions({ filter: { sender: ADDRESS }, limit: 3 })
+```
+
+Passing `FromAddress` (the JSON-RPC spelling) is rejected with *"A transaction filter must
+specify exactly one of sender, function"* — a refusal, not a silent no-op. That difference
+is the whole point: one method tells you your filter is wrong, the other pretends it worked.
+
+Verified by filtering, not by calling: a nonsense address returns **0** rows while the
+deployer and the agent each return 3. Row shape is `{ $kind, Transaction: { digest,
+ timestampMs, checkpoint, status } }` — the digest is what `findCreatedOrder` consumes.
+
+So discovery IS possible: enumerate the maker's transactions, read the order id from each
+create, then check each order's state. The earlier "shared objects cannot be listed by type"
+remains true — that is a different limitation and it still holds — but it never implied this
+one.
+
+**The general lesson:** "the SDK ignores filters" was a conclusion about ONE method. Testing
+a second method's filter with a value that cannot match is cheap, and it is the difference
+between a design constraint and a mistaken belief. A filter is not proven by calling it; it
+is proven by giving it something that must fail.
+
 **A failed transaction comes back under `FailedTransaction`, not `Transaction`.** Reading
 only the success shape reported `digest: null` for precisely the failures the
 `--no-simulate` mode exists to produce. Cost one paid transaction to discover, because
