@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "checkJs": false,
+    "types": ["node"],
+    "noEmit": true
+  },
+  "include": [
+    "src/ui.ts",
+    "src/refund-order.ts",
+    "src/web/events.d.ts",
+    "src/web/units.d.ts"
+  ]
+}

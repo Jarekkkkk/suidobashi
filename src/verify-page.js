@@ -119,7 +119,7 @@ check('toUnits honours its decimals argument', toUnits('1', 2) === '100' && toUn
 //    them. A mismatch yields null, and a null at module load THROWS -- so no handler
 //    attaches anywhere and every button on the page does nothing. That is exactly how
 //    this project's first bug presented itself, and nothing else checks for it.
-const uiSource = fs.readFileSync('src/ui.js', 'utf8');
+const uiSource = fs.readFileSync('src/ui.ts', 'utf8');
 const pageSource = fs.readFileSync('src/web/page.js', 'utf8');
 
 const declared = new Set([
@@ -190,7 +190,9 @@ for (const k of TERMINAL_KINDS) {
 // The vocabulary being closed is the point, so the check is that the CODE agrees with it.
 // Read from the source rather than from a hand-kept list, because a list would be one more
 // thing to keep in step — and the failure mode here is precisely a list that got out of step.
-const serverSrc = fs.readFileSync(new URL('./ui.js', import.meta.url), 'utf-8');
+// The server is TypeScript now. Read from the file that exists rather than a path that was
+// correct yesterday — this broke silently on the rename and only the count check caught it.
+const serverSrc = fs.readFileSync(new URL('./ui.ts', import.meta.url), 'utf-8');
 const emitted = [...serverSrc.matchAll(/\bevent\(\s*'([a-z-]+)'/g)].map((m) => m[1]);
 check('the server emits at least one event kind', emitted.length > 0,
   `found ${emitted.length} — the regex may have stopped matching`);

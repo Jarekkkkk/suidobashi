@@ -147,15 +147,15 @@ check('the fixture transaction still parses as a guard',
 // every check above tested a module that nothing ran, while the code that actually ran
 // was untested -- and the two had already drifted apart on a CLI spelling. A test that
 // exercises a copy is worse than no test, because it reports green.
-const uiSource = fs.readFileSync('src/ui.js', 'utf8');
+const uiSource = fs.readFileSync('src/ui.ts', 'utf8');
 check('the server imports this module instead of keeping its own copy',
-  uiSource.includes("from './guard-id.js'"), 'src/ui.js does not import src/guard-id.js');
+  uiSource.includes("from './guard-id.js'"), 'src/ui.ts does not import src/guard-id.js');
 check('the server does not search the transaction itself any more',
   !/position_guard::PositionGuard/.test(uiSource),
-  'src/ui.js still contains its own guard lookup');
+  'src/ui.ts still contains its own guard lookup');
 check('the server does not rewrite the config itself any more',
   !uiSource.includes('GUARD_SHARED_VERSION = '),
-  'src/ui.js still contains its own config rewrite');
+  'src/ui.ts still contains its own config rewrite');
 
 // The contract that made src/web/page.js crash: a failure has an `error` and no `id`,
 // so a caller that reads `.id` unconditionally throws on the failure path. Kept explicit
