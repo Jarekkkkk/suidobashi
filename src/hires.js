@@ -48,7 +48,14 @@ export const DEFAULT_HIRE = 'standard';
 /** Names the model may emit. Kept as an array so the schema and the prompt agree. */
 export const HIRE_NAMES = Object.keys(HIRES);
 
-export function getHire(name) {
+  /**
+   * The hire a name refers to, or null if it names nothing.
+   *
+   * @param {unknown} name as the model or a form field supplied it — normalised here rather
+   *   than at every call site, since it arrives from both
+   * @returns {typeof HIRES[keyof typeof HIRES] | null}
+   */
+  export function getHire(name) {
   const key = String(name ?? '').trim().toLowerCase();
   if (!key) return HIRES[DEFAULT_HIRE];
   return HIRES[key] ?? null;

@@ -21,6 +21,7 @@ const OBJECT_ID = /^0x[0-9a-f]{64}$/;
  * writes the Cetus pool, which is shared too and already exists; picking by shape
  * rather than by type would quietly select the pool.
  *
+ * @param {any} doc the parsed `sui client tx-block --json` output
  * @returns {{id: string, version: number} | {error: string}}
  */
 export function findCreatedGuard(doc) {
@@ -53,6 +54,9 @@ export function findCreatedGuard(doc) {
  * the id without its shared version, or the reverse, leaves a pair that disagrees,
  * and the resulting failure is much harder to read than not writing at all.
  *
+ * @param {unknown} source the file's text, as read
+ * @param {unknown} id the new guard id
+ * @param {unknown} version its initial shared version
  * @returns {string | null}
  */
 export function repointAddresses(source, id, version) {

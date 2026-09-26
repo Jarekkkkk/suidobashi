@@ -192,7 +192,7 @@ async function hires() {
       const j = (o.object ?? o).json ?? {};
       row.agent = j.agent;
       row.suspended = Boolean(j.suspended);
-      const list = (j.allowed_pools?.contents ?? []).map((x) => String(x).toLowerCase());
+      const list = (j.allowed_pools?.contents ?? []).map((/** @type {unknown} */ x) => String(x).toLowerCase());
       row.venues = list.length;
       // Whether this hire's OWN venue is open, read from the chain. A count alone
       // hides the difference between two hires on two different pools.
@@ -659,6 +659,8 @@ let activeGuard = { id: GUARD_ID, version: GUARD_SHARED_VERSION };
  * Persisted back into addresses.js so it survives a restart and shows up in git.
  * The write is checked before it happens: this file holds every deployed id, and a
  * corrupt one is far worse than a stale one.
+ *
+ * @param {string} digest
  */
 function adoptGuardFrom(digest) {
   const r = spawnSync('sui', ['client', 'tx-block', digest, '--json'],
@@ -715,6 +717,9 @@ function adoptGuardFrom(digest) {
  * The dry run refusing a doomed transaction is correct — but a Move abort code is
  * not an explanation, and "borrow_child_object" tells a person nothing about what
  * to do next. These are the aborts this project actually keeps hitting.
+ *
+ * @param {unknown} message
+ * @returns {string}
  */
 function explainAbort(message) {
   const m = String(message || '');
@@ -853,6 +858,9 @@ async function outstandingOrders() {
  * Needed because an order id is generated on chain, so the browser cannot know it —
  * and the MCP server has to be told inside the order's window. With a one-minute
  * default that notification cannot be a person relaying a digest.
+ *
+ * @param {string} digest
+ * @returns {string | null}
  */
 function findCreatedOrder(digest) {
   const r = spawnSync('sui', ['client', 'tx-block', digest, '--json'],
@@ -863,7 +871,7 @@ function findCreatedOrder(digest) {
   } catch {
     return null;
   }
-  const created = (doc.objectChanges || []).find((c) => c.type === 'created'
+  const created = (doc.objectChanges || []).find((/** @type {any} */ c) => c.type === 'created'
     && String(c.objectType || '').includes('::order::Order<'));
   return created?.objectId ?? null;
 }
@@ -963,6 +971,7 @@ async function state() {
     network: 'mainnet',
     baseUrl: 'https://fullnode.mainnet.sui.io:443',
   });
+  /** @param {string} owner @param {string} coinType */
   const at = async (owner, coinType) => {
     const b = await client.getBalance({ owner, coinType });
     return b.balance?.balance ?? '0';
@@ -1146,6 +1155,7 @@ const PAGE = `<!doctype html>
 //
 // Loud, not silent: both handlers name the error and its first frames, because a crash that
 // leaves no trace is how this one hid.
+/** @param {string} label @param {unknown} err */
 const complain = (label, err) => {
   const e = err instanceof Error ? err : new Error(String(err));
   console.error(`\n!! ${label}: ${e.message}`);
@@ -1156,6 +1166,7 @@ process.on('uncaughtException', (e) => complain('uncaught exception', e));
 process.on('unhandledRejection', (e) => complain('unhandled rejection', e));
 
 const server = http.createServer((req, res) => {
+  /** @param {number} code @param {string} body @param {string} [type] */
   const send = (code, body, type = 'application/json') => {
     res.writeHead(code, { 'Content-Type': type });
     res.end(body);
