@@ -45,11 +45,12 @@ const HOST = process.env.MCP_HOST ?? '127.0.0.1';
  * is what they OFFER, this is what the server ACCEPTS. Conflating them would put the
  * server's cost model into a number the maker controls.
  *
- * Defaults to 5000 (0.005 USDC), which is break-even: a successful fill costs about
- * 0.0043 SUI of gas (~$0.0049) against a $0.005 fee. A server wanting a margin raises
- * this rather than asking makers for more.
+ * 0.01 USDC, set from a MEASURED cost rather than an estimate: a real fill paid 0.00557
+ * SUI of gas (~$0.0064), so the previous 0.005 floor accepted fills that lost money.
+ * A floor below cost is worse than no floor — it looks like a policy and behaves like
+ * a subsidy.
  */
-const MIN_FEE_OUT = BigInt(process.env.MCP_MIN_FEE_OUT ?? '5000');
+const MIN_FEE_OUT = BigInt(process.env.MCP_MIN_FEE_OUT ?? '10000');
 
 let client;
 

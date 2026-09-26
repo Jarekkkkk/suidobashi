@@ -193,42 +193,67 @@ The real guarantee is the gate stack in [ARCHITECTURE.md](ARCHITECTURE.md): both
 servers can be hostile and the limits still hold. Everything above exists to save
 gas and mistakes.
 
-## x402 — the service fee
+## How a fill is paid — and where x402 is NOT
+
+A fill is paid by a **fee inside the order**, not by x402:
 
 ```text
-402 Payment Required  →  pay in USDC  →  retry with a proof
+the maker escrows the input and declares fee_out
+settle asserts        output - fee >= min_out     <- the floor is what the maker RECEIVES
+the fee goes          to whoever fills it
+the rest goes         to the maker's destination
 ```
 
-Precedent: Glassnode runs `x402.glassnode.com` mirroring their standard API
-one-to-one, pay-per-request in USDC, no API key, plus a `/metadata` route. The
-metadata-route idea for MCP servers follows that shape.
+The fee sits **on top of** the floor, not inside it: a maker asking for 5 USDC receives
+5 USDC. And no fee recipient is declared — whoever fills collects — because the maker is
+buying a fill and is indifferent to who provides it. That is what makes a short window a
+race worth entering rather than a favour owed.
 
-Three rules:
+**x402 must not also charge for a fill.** Two payments for one service is not a fee
+model. x402's remaining role is the routes that are not fills — metadata, quotes, route
+previews — where the request-response shape still applies. Precedent for that: Glassnode
+runs `x402.glassnode.com` mirroring their standard API one-to-one, pay-per-request in
+USDC, no API key, plus a `/metadata` route.
 
-1. **The fee is for the service, the allowance bounds the capital.** They are
-   different money and must never be merged in the UI or the code.
-2. **The server pays its own gas** and recovers it through the fee, which means it
-   carries SUI price risk against a USDC fee. This is also what bounds a key
-   compromise to the gas wallet.
+Three rules that survive:
+
+1. **The fee is for the service, the allowance bounds the capital.** Different money,
+   never merged in the UI or the code.
+2. **The filler pays its own gas, and the fee has to clear it.** Measured: a fill costs
+   ~0.00557 SUI (~$0.0064) against a 0.01 USDC fee. A floor below cost is worse than no
+   floor — it looks like a policy and behaves like a subsidy.
 3. **A paid fee is not a permission.** Paying does not widen the grant.
 
 ## Lifecycle
 
 ```text
 ① DISCOVER   browse / search the marketplace
-             filter by action, venue, fee, reputation
 ② INSTALL    see packages · functions · prompt · fee        ← the consent moment
-             choose a budget
-             → set_allowance + set_pool_allowed on chain
-             → write the local installed record
+             choose a budget → set_allowance + set_pool_allowed on chain
 ③ ASK        route over INSTALLED verbs (deterministic)
-             model extracts parameters only, grounding runs
 ④ CONFIGURE  user supplies the declared variables
-⑤ PAY+BUILD  POST /action with the x402 fee
-⑥ VERIFY     decode · compare against the claim · manifest · simulate
-⑦ SIGN+SUBMIT  wallet signs, chain runs the real gates
+⑤ CREATE     the maker escrows an order on chain, declaring min_out and a fee
+⑥ NOTIFY     POST /fill with the order id — NOT a poll
+⑦ FILL       the server signs as the agent: swap · assert output - fee >= min_out
+             · pay itself the fee · send the rest to the maker
 ⑧ RECORD     digest, status, and reputation derived from EVENTS
 ```
+
+**Step ⑥ is a notification, not a watcher, and that is forced rather than chosen.**
+Polling for orders would need events or a by-type object query, and neither works: the
+SDK's `listEvents` **silently ignores every filter shape** — verified, `MoveModule`,
+`eventType` and `sender` all returned the same unfiltered results — and shared objects
+cannot be listed by type. So the maker's client tells the server, and the order's window
+has to be long enough for a machine to react. That is why the default is 60 seconds, and
+why the notification is automatic rather than something a person does: no human can
+create an order and relay its id inside a minute.
+
+**Step ⑦ is signed by the SERVER, not a wallet.** The policy's `agent` is the server's
+address, so only the server can reach the settle path — `ctx.sender() == policy.agent` is
+checked on chain, and it has been demonstrated: a call from any other address aborts with
+`ENotAgent`. This is the one place in this project where a key lives inside a running
+process, and it is deliberate — the agent key holds no funds, only a bounded permission,
+and the on-chain gates bound it even if the process is compromised.
 
 **Installation is what makes routing tractable.** The model never sees hundreds of
 published strategies — only the installed set, typically one to five.
@@ -257,16 +282,27 @@ place, which is exactly what `borrow_child_object` did for a whole cycle.
 
 ## Reference implementation
 
-No publisher exists yet, so the first MCP server should be **ours**: a thin HTTP
-wrapper around the existing `swap.js` implementing this contract. That is the
-cheapest way to find out which schema fields are actually needed rather than
-guessed, and it is the artefact a publisher copies.
+**Built.** `src/mcp-server.js`, two routes:
 
-Order of work suggested by the design:
+```text
+GET  /metadata   what it does, and the terms it fills on
+POST /fill       { orderId } — fill it, or say why not
+```
 
-1. per-server agent identity (config, not Move) — makes the caller gate testable
-2. `max_slippage_bps` on the policy (additive Move) — closes the price hole
-3. the reference MCP server + the manifest fetch seam
-4. byte decoding and claim verification
-5. install / marketplace screens
-6. Walrus + SuiNS behind the two seams
+Deliberately not a watcher (step ⑥) and deliberately not charging x402 for a fill (see
+the fee section). Its `MCP_MIN_FEE_OUT` is its own policy, separate from any maker's
+default: the maker's number is what they OFFER, this is what the server ACCEPTS, and
+conflating them would put the server's cost model into a number the maker controls.
+
+The order of work that led here, for a publisher following the same path:
+
+```text
+✓  per-server agent identity       config, not Move — makes the caller gate testable
+✓  max_slippage_bps on the policy  additive Move — closes the price hole
+✓  escrowed orders                 the price becomes the MAKER's commitment
+✓  a fee inside the order          a fill can be paid without a second balance
+✓  the reference server + wire     order id read from the tx, POSTed to the server
+·  install / marketplace screens
+·  byte verification against the manifest
+·  Walrus + SuiNS behind the two seams
+```

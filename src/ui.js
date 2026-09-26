@@ -707,7 +707,7 @@ const PAGE = `<!doctype html>
   <span class="label">escrow swap</span>
   <span class="grp">escrow <input id="ordAmt" type="text" value="0.01"> SUI
     floor <input id="ordMin" type="text" value="0.005"> USDC
-    fee <input id="ordFee" type="text" value="0.005"> USDC
+    fee <input id="ordFee" type="text" value="0.01"> USDC
     <button class="ghost" id="ordMake">Create order</button></span>
   <span class="grp">burn settled <input id="ordId" type="text" placeholder="0x…" size="10">
     <button class="ghost" id="ordBurn">Burn</button></span>

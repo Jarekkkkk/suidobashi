@@ -39,17 +39,20 @@ const MIN_OUT = BigInt(process.env.ORDER_MIN_OUT ?? '5000');               // 0.
  * floor of 5 USDC means 5 USDC lands in your wallet and the fee is paid from above
  * that. Whoever fills the order collects, so no recipient is named.
  *
- * 0.005 USDC is a DEFAULT, not a price — the fee is declared per order, so this is
- * what you offer unless you change it. And it sits at break-even for a filler:
+ * 0.01 USDC is a DEFAULT, not a price — the fee is declared per order, so this is what
+ * you offer unless you change it. And it has to clear what a fill COSTS the filler,
+ * which is measured rather than estimated:
  *
- *   a successful fill   gas 0.0043 SUI x ~$1.14 = $0.0049, fee $0.0050
- *   a race lost late    gas 0.0011 SUI, no fee   = -$0.0013
+ *   a fill pays     0.01 USDC             = $0.0100
+ *   a fill costs    gas 0.00557 SUI x ~$1.14 = $0.0064   (measured from a real fill)
+ *   margin                                = $0.0036
  *
- * So one lost race outweighs several wins. A server that wants a margin sets its own
- * MINIMUM FEE and declines orders below it — the server's floor is the other half of
- * this pair, and it belongs there rather than in the maker's default.
+ * The first version of this comment used an ESTIMATED gas of 0.0043 SUI and set the
+ * fee to 0.005, which read as break-even and was in fact a loss: 0.005 against a real
+ * cost of 0.0064. A filler that loses money on every fill is a service that cannot
+ * run, so the estimate being wrong mattered.
  */
-const FEE_OUT = BigInt(process.env.ORDER_FEE_OUT ?? '5000');   // 0.005 USDC
+const FEE_OUT = BigInt(process.env.ORDER_FEE_OUT ?? '10000');   // 0.01 USDC
 /**
  * How long the order stays open, in milliseconds. After this, ANYONE may refund it —
  * and the funds always go to the maker.
