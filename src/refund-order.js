@@ -19,7 +19,7 @@
  */
 import 'dotenv/config';
 import {
-  PACKAGE_LATEST_ID, SUI_TYPE, CLOCK_ID, CLOCK_SHARED_VERSION, DEPLOYER,
+  PACKAGE_LATEST_ID, SUI_TYPE, CLOCK_ID, DEPLOYER,
 } from './addresses.js';
 
 const EXECUTE = process.argv.includes('--execute');
@@ -69,18 +69,31 @@ async function main() {
   const signerAddress = signer ? signer.toSuiAddress() : (process.env.SUI_SENDER || DEPLOYER);
   if (!signerAddress) throw new Error('no sender address — set SUI_SENDER');
 
+  // RESOLVED REFERENCES, matching burn-order.js exactly.
+  //
+  // This used `tx.sharedObjectRef(...)` with an explicit initialSharedVersion, which is the
+  // right form for an OFFLINE build. It is not the right form here, and the difference is
+  // visible in the built data:
+  //
+  //   burn     [{"UnresolvedObject":{"objectId":"0x…"}}]
+  //   refund   [{"Object":{"SharedObject":{…,"initialSharedVersion":…}}}]
+  //
+  // Both encode valid transactions — the chain simulated both — but Slush refused the second
+  // with "Cannot read properties of undefined (reading 'owner')" from inside the extension,
+  // and burn is the one it signs happily. Since a client is available here, `tx.object(id)`
+  // resolves at build time and produces the shape that is known to work.
+  //
+  // Recorded as a HYPOTHESIS rather than a proven fix: a simulation cannot detect a
+  // wallet-side parse failure, so only Slush can confirm this. What it does guarantee is that
+  // two paths doing the same kind of thing no longer differ.
   const tx = new Transaction();
   tx.setSender(signerAddress);
   tx.moveCall({
     target: `${PACKAGE_LATEST_ID}::order::refund`,
     typeArguments: [SUI_TYPE],
     arguments: [
-      tx.sharedObjectRef({
-        objectId: ORDER_ID, initialSharedVersion: Number(sharedVersion), mutable: true,
-      }),
-      tx.sharedObjectRef({
-        objectId: CLOCK_ID, initialSharedVersion: CLOCK_SHARED_VERSION, mutable: false,
-      }),
+      tx.object(ORDER_ID),
+      tx.object(CLOCK_ID),
     ],
   });
 
