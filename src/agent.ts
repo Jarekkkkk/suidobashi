@@ -31,7 +31,8 @@
  */
 import 'dotenv/config';
 import { HIRES, HIRE_NAMES, DEFAULT_HIRE, type Hire, type HireName } from './hires.js';
-import { ACTION_IDS } from './talents.js';
+import { describeTalents } from './talents.js';
+import { listTalents } from './db.js';
 
 const QVAC_URL = process.env.QVAC_URL || 'http://127.0.0.1:11434/v1/chat/completions';
 const MODEL = process.env.QVAC_MODEL || 'intent';
@@ -56,16 +57,23 @@ if (!LOOPBACK.test(qvacHost)) {
 
 const SUI_MIST = 1_000_000_000n;
 
-/** The only actions the agent may express. Anything else is `unknown`, and refused. */
-const ACTIONS = ['swap', 'deposit_liquidity', 'rebalance', 'redeem', 'status', 'unknown'];
-
-const SYSTEM_PROMPT = `Extract the action, the direction, the amount and the agent EXACTLY as written.
+/**
+ * The prompt, built per request.
+ *
+ * IT WAS A CONSTANT, and that is the whole problem with a stateless model: what it can
+ * do has to be told to it every time, and a constant tells it the same thing whatever
+ * is installed. Now the valid actions come from the installed talents, so installing
+ * one is what makes it available and removing one is what takes it away.
+ */
+function systemPrompt(validActions: string) {
+  return `Extract the action, the direction, the amount and the agent EXACTLY as written.
 Do not convert units. Do not do arithmetic.
 from and to are the coin symbols, or "" when the request has no direction.
 agent is which hired agent to use, or "" for the default. Available: ${HIRE_NAMES.join(', ')}.
 If no amount is given, use "".
 Use action "unknown" when the request is not one of the listed actions.
-Valid actions: ${ACTION_IDS.join(', ')}. /no_think`;
+Valid actions: ${validActions}. /no_think`;
+}
 
 /** Load-bearing: these are what make a 0.6B model extract reliably. */
 const EXAMPLES = [
@@ -90,25 +98,36 @@ const EXAMPLES = [
 const SUPPORTED_FROM = 'SUI';
 const SUPPORTED_TO = 'USDC';
 
-const RESPONSE_FORMAT = {
-  type: 'json_schema',
-  json_schema: {
-    name: 'intent',
-    strict: true,
-    schema: {
-      type: 'object',
-      properties: {
-        action: { type: 'string', enum: ACTIONS },
-        from: { type: 'string', enum: ['SUI', 'USDC', ''] },
-        to: { type: 'string', enum: ['SUI', 'USDC', ''] },
-        amountText: { type: 'string' },
-        agent: { type: 'string', enum: ['', ...HIRE_NAMES] },
+  /**
+   * The schema the model must answer in, built per request.
+   *
+   * IT WAS A CONSTANT, the same mistake as the prompt one layer up: a constant cannot know what
+   * is installed, so it offered actions the agent had no talent for. This is the STRONGER guard
+   * of the two — a model that cannot name an action will not propose one, so the refusal never
+   * has to happen rather than happening correctly.
+   */
+  function responseFormat(validActions: string[]) {
+    return {
+    type: 'json_schema',
+    json_schema: {
+      name: 'intent',
+      strict: true,
+      schema: {
+        type: 'object',
+        properties: {
+          // Only what is installed, plus `unknown`.
+          action: { type: 'string', enum: [...validActions, 'unknown'] },
+          from: { type: 'string', enum: ['SUI', 'USDC', ''] },
+          to: { type: 'string', enum: ['SUI', 'USDC', ''] },
+          amountText: { type: 'string' },
+          agent: { type: 'string', enum: ['', ...HIRE_NAMES] },
+        },
+        required: ['action', 'from', 'to', 'amountText', 'agent'],
+        additionalProperties: false,
       },
-      required: ['action', 'from', 'to', 'amountText', 'agent'],
-      additionalProperties: false,
     },
-  },
-};
+    };
+  }
 
 /**
  * Exact decimal → MIST. No floating point: parse the string by hand so "0.05"
@@ -125,8 +144,10 @@ function parseAmountText(text: string) {
   return { ok: true, amountMist: BigInt(whole) * SUI_MIST + BigInt(padded) };
 }
 
-async function parseIntent(text: string) {
-  const messages: { role: string; content: string }[] = [{ role: 'system', content: SYSTEM_PROMPT }];
+async function parseIntent(text: string, validActions: string[]) {
+  const messages: { role: string; content: string }[] = [
+    { role: 'system', content: systemPrompt(validActions.join(', ')) },
+  ];
   for (const [user, intent] of EXAMPLES) {
     messages.push({ role: 'user', content: String(user) });
     messages.push({ role: 'assistant', content: JSON.stringify(intent) });
@@ -140,7 +161,7 @@ async function parseIntent(text: string) {
       model: MODEL,
       temperature: 0,
       messages,
-      response_format: RESPONSE_FORMAT,
+      response_format: responseFormat(validActions),
     }),
   });
   if (!res.ok) throw new Error(`qvac ${res.status}: ${(await res.text()).slice(0, 200)}`);
@@ -218,14 +239,24 @@ function selectHire(text: string) {
 function validate(
 intent: any,
 amountMist: bigint | null,
-{ walletSuiMist, text, hire, policy }: {
+{ walletSuiMist, text, hire, policy, actions }: {
 walletSuiMist: bigint; text: string; hire: Hire | null; policy: any;
+/** What the installed talents make available, checked below. */
+actions: string[];
 },
 ) {
   if (!intent || typeof intent !== 'object') return { ok: false, reason: 'not an object' };
-  if (!ACTIONS.includes(intent.action)) {
-    return { ok: false, reason: `action "${intent.action}" is not in the allowlist` };
-  }
+    // NOT INSTALLED IS NOT ALLOWED. The talent model says what the agent can do is what has
+    // been equipped, so an action whose talent is absent is refused here rather than planned
+    // and failing somewhere further along.
+    //
+    // `unknown` IS NOT A MISSING TALENT. It is the model saying the request is not an action at
+    // all, and the check below gives it the right message — "not one of the supported actions"
+    // rather than naming a talent that was never asked for. Order matters: testing it here first
+    // reported an unrecognised request as a missing installation.
+    if (intent.action !== 'unknown' && !actions.includes(intent.action)) {
+      return { ok: false, reason: `"${intent.action}" needs a talent that is not installed` };
+    }
   if (intent.action === 'unknown') {
     return { ok: false, reason: 'request is not one of the supported actions' };
   }
@@ -425,7 +456,11 @@ async function main() {
     process.exit(2);
   }
 
-  const { intent, finishReason } = await parseIntent(text);
+  // Read at request time, not at load: what the agent can do follows what is installed.
+  const installedIds = listTalents().map((t) => t.id);
+  const { actions: available } = describeTalents(installedIds);
+  const validActions = available.map((a) => a.id);
+  const { intent, finishReason } = await parseIntent(text, validActions);
   const walletSuiMist = await walletBalanceMist();
 
   // The model extracted a literal; the arithmetic is ours and exact.
@@ -451,7 +486,9 @@ async function main() {
   } else if (!parsed.ok) {
     verdict = { ok: false, reason: parsed.reason };
   } else {
-    verdict = validate(intent, amountMist ?? null, { walletSuiMist, text, hire, policy });
+      verdict = validate(intent, amountMist ?? null, {
+        walletSuiMist, text, hire, policy, actions: validActions,
+      });
   }
 
   let decidedBy;

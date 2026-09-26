@@ -23,7 +23,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { VAULT_ID, DEPLOYER, USDC_TYPE, REWARD_TYPE, PACKAGE_LATEST_ID, POOL_TICK_SPACING, GUARD_ID, GUARD_SHARED_VERSION, SLIPPAGE_BPS } from './addresses.js';
 import { HIRES } from './hires.js';
-import { BUILT_IN_TALENTS } from './talents.js';
+import { MARKETPLACE, describeTalents, talentFor } from './talents.js';
 import { findCreatedGuard, repointAddresses } from './guard-id.js';
 import { event, endingFor, type EventKind } from './web/events.js';
 import {
@@ -1525,10 +1525,15 @@ const server = http.createServer((req, res) => {
     const id = parts[2];
 
     if (req.method === 'GET' && !id) {
-      // BOTH KINDS, and the distinction is carried in the data rather than implied by the
-      // order: a built-in is always available, an MCP one is only as good as the address it
-      // came from. The tab labels them from this field.
-      return send(200, JSON.stringify({ talents: listTalents(), builtIn: BUILT_IN_TALENTS }));
+      // THE MARKETPLACE AND WHAT IS INSTALLED, as two lists. The tab shows the first as things
+      // you can add and marks the ones already in the second — which is what a marketplace is,
+      // and why nobody types a URL any more.
+      const installedIds = listTalents().map((t) => t.id);
+      return send(200, JSON.stringify({
+        marketplace: MARKETPLACE,
+        installedIds,
+        talents: listTalents(),
+      }));
     }
 
     if (req.method === 'POST' && !id) {
@@ -1540,15 +1545,30 @@ const server = http.createServer((req, res) => {
       let raw = '';
       req.on('data', (c) => { raw += c; if (raw.length > 8192) req.destroy(); });
       req.on('end', async () => {
-        let url = '';
+        let wanted = '';
         try {
-          ({ url } = JSON.parse(raw || '{}'));
+          // `id` from the marketplace, or `url` for something not listed. Both accepted because
+          // the marketplace is a convenience, not a gate.
+          const body = JSON.parse(raw || '{}');
+          wanted = String(body.id ?? body.url ?? '').trim();
         } catch {
           return send(400, JSON.stringify({ error: 'bad body' }));
         }
-        url = String(url || '').trim().replace(/\/+$/, '');
+
+        // A BUILT-IN TALENT IS INSTALLED DIRECTLY. There is nothing to fetch: the app performs
+        // it itself, and the entry in the marketplace already says what it can do. Fetching a
+        // URL for it would be asking a server about a capability that lives here.
+        const listed = talentFor(wanted);
+        if (listed && listed.kind === 'built-in') {
+          installTalent(listed.id, listed.name, listed, null);
+          return send(200, JSON.stringify({ ok: true, id: listed.id, name: listed.name }));
+        }
+
+        const url = wanted.replace(/\/+$/, '');
         if (!/^https?:\/\/[^\s]+$/.test(url)) {
-          return send(400, JSON.stringify({ error: 'url must be an http(s) address' }));
+          return send(400, JSON.stringify({
+            error: 'not in the marketplace, and not an http(s) address either',
+          }));
         }
 
         try {
@@ -1619,14 +1639,13 @@ const server = http.createServer((req, res) => {
         // judgement it is bad at. If this misses a phrasing, the user gets a refusal — the same
         // behaviour as before, not a wrong action.
         if (CAPABILITY_QUESTION.test(body.text)) {
-          const lines = BUILT_IN_TALENTS.flatMap((t) => t.actions.map((a) => `- ${a.id}: ${a.title}`));
+          // FROM WHAT IS INSTALLED, so the answer and the agent agree by construction rather
+          // than by both being written correctly.
           const installed = listTalents();
+          const { text: capabilities } = describeTalents(installed.map((t) => t.id));
           const text = [
-            'I can do these:',
-            ...lines,
-            installed.length
-              ? `\nInstalled over MCP (services I can ask): ${installed.map((t) => t.name).join(', ')}.`
-              : '',
+            capabilities ? 'I can do these:' : 'Nothing is installed yet — add a talent first.',
+            capabilities,
           ].filter(Boolean).join('\n');
           return send(200, JSON.stringify({
             decision: 'ANSWERED',

@@ -56,7 +56,10 @@ export function ChatsPane({
     }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  // `current` is a dependency, not just `load`: on mount the app creates a chat if there are
+  // none, and that happens AFTER this list has loaded. Without it the list showed empty,
+  // and the next click on + made a second chat — which is exactly the bug reported.
+  useEffect(() => { void load(); }, [load, current]);
 
   // Focus the field the moment it appears, so renaming is one click and typing rather than
   // click, find, click.
@@ -205,8 +208,8 @@ export function ChatsPane({
                 {/* The second click. Overlays the row rather than replacing it, so the target
                     does not move between the two clicks. */}
                 {isConfirming && (
-                  <div className="absolute inset-0 flex items-center justify-between rounded-md bg-destructive/15 px-2.5">
-                    <span className="text-[11px] text-destructive">delete this chat?</span>
+                  <div className="absolute inset-0 flex items-center justify-between rounded-md bg-destructive px-2.5">
+                    <span className="text-[11px] text-destructive-foreground">delete this chat?</span>
                     <div className="flex items-center gap-1">
                       <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]"
                         onClick={() => setConfirming(null)}>keep</Button>

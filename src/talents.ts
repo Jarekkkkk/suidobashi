@@ -1,19 +1,23 @@
 /*
- * The talents that ship with the app.
+ * The marketplace: what CAN be installed.
  *
- * A TALENT IS A CAPABILITY. Some are served over MCP and installed from a server's manifest;
- * these are built in, and the difference matters because a built-in one is always available and
- * an MCP one is only as good as the address it came from.
+ * A TALENT IS A CAPABILITY. Built-in ones the app performs itself; MCP ones are served by a
+ * server and fetched from its manifest. Both are installed the same way and both end up in the
+ * same table, because from the model's point of view there is no difference — it is stateless,
+ * so what it can do has to be TOLD to it, and installed is what tells it.
  *
- * THE LOCAL MODEL IS STATELESS, so what it can do has to be TOLD to it on every request. That is
- * what this registry is for: the agent's prompt is assembled from the talents that are available
- * rather than being a constant that happens to describe swapping. Before this, the model was
- * told about one capability because one capability existed.
+ * WHY SWAP IS INSTALLABLE RATHER THAN ALWAYS ON. The model you described is "the local AI is
+ * stateless, so we equip it per talent". A capability that is always on is not equipped, it is
+ * wired in — and then "install" only ever applies to extras, and the marketplace is decoration.
+ * Equipping swap is what makes it a talent rather than a label on hardcoded behaviour.
  *
- * ONLY WHAT WORKS IS DECLARED. A talent that lists an action it cannot perform is worse than one
- * that lists nothing — the prompt would promise it, the model would offer it, and the refusal
- * would arrive from somewhere the user cannot see. So the query talent is NOT here yet: it is
- * designed and not written, and it gets an entry the day it answers.
+ * THE RULE FOR WHAT SHIPS BUILT IN: does it need a permission? A query reads the chain and needs
+ * nothing. A swap spends and needs an on-chain grant; a position needs a grant and a guard. So
+ * query is built in and the other two are installed — which is also why `query` is the one that
+ * needs no address, no grant, and no counterparty.
+ *
+ * THE ADDRESS IS IN THE LIST, not typed by hand. A marketplace you browse is the point; the URL
+ * field was a scaffold for having nothing to browse.
  */
 
 export type TalentAction = {
@@ -22,32 +26,41 @@ export type TalentAction = {
   title: string;
 };
 
-export type BuiltInTalent = {
+export type MarketplaceTalent = {
+  /** `built-in:<name>` for one the app performs, or the URL for one served over MCP. */
   id: string;
   name: string;
-  kind: 'built-in';
+  kind: 'built-in' | 'mcp';
+  description: string;
   actions: TalentAction[];
+  /** Only for MCP talents: where its manifest lives. */
+  url?: string;
 };
 
-export const BUILT_IN_TALENTS: BuiltInTalent[] = [
+export const MARKETPLACE: MarketplaceTalent[] = [
+  {
+    id: 'built-in:query',
+    name: 'query',
+    kind: 'built-in',
+    description: 'Read the chain. No permission needed, because nothing is spent.',
+    actions: [
+      { id: 'status', title: 'Report what the wallet and the guarded position hold' },
+    ],
+  },
   {
     id: 'built-in:swap',
     name: 'swap',
     kind: 'built-in',
+    description: 'Escrow SUI or USDC and let someone fill it. Needs an on-chain grant.',
     actions: [
-      {
-        id: 'swap',
-        title: 'Swap SUI for USDC, or USDC for SUI, through an escrowed order',
-      },
+      { id: 'swap', title: 'Swap SUI for USDC, or USDC for SUI, through an escrowed order' },
     ],
   },
   {
-    // Provisioning, not trading. It needs its own on-chain grant and its own guard, and it is
-    // separate from swap because the two have nothing to do with each other: a hire that may
-    // swap has no business opening positions unless the owner said so.
     id: 'built-in:position',
     name: 'position',
     kind: 'built-in',
+    description: 'Open and manage a guarded liquidity position. Needs a grant and a guard.',
     actions: [
       { id: 'deposit_liquidity', title: 'Add liquidity to the guarded position' },
       { id: 'rebalance', title: 'Move the guarded position into a new tick range' },
@@ -55,37 +68,43 @@ export const BUILT_IN_TALENTS: BuiltInTalent[] = [
     ],
   },
   {
-    id: 'built-in:status',
-    name: 'status',
-    kind: 'built-in',
+    // THE FILLER'S SIDE, not the maker's — kept in the list so it is visible and honest rather
+    // than something a user has to work out from a manifest. Its action takes someone ELSE's
+    // order, which is why installing it gives the agent nothing to do.
+    id: 'http://127.0.0.1:8790',
+    name: 'sui-tokyo-swap',
+    kind: 'mcp',
+    url: 'http://127.0.0.1:8790',
+    description: 'The reference filler: takes escrowed orders that others create.',
     actions: [
-      { id: 'status', title: 'Report what the wallet and the guarded position hold' },
+      { id: 'fill', title: 'Fill an escrowed swap order created by someone else' },
     ],
   },
 ];
 
-/**
- * The action ids the model may choose from.
- *
- * Derived from the registry rather than written into the prompt, which is the whole point: the
- * prompt said `swap, deposit_liquidity, rebalance, redeem, status` while nothing checked that
- * against what the code could actually plan. Two lists, one of them in a string.
- */
-export const ACTION_IDS = BUILT_IN_TALENTS.flatMap((t) => t.actions.map((a) => a.id));
+/** The entry for an installed id, or null if it is no longer in the list. */
+export function talentFor(id: string): MarketplaceTalent | null {
+  return MARKETPLACE.find((t) => t.id === id) ?? null;
+}
 
 /**
- * What the agent may tell the user it can do.
+ * What the model is told it can do, from the talents that are INSTALLED.
  *
- * Assembled from the talents rather than written out, so adding one is adding an entry rather
- * than editing a prompt in two places and hoping they agree. A prompt that disagrees with the
- * code is the same class of bug as a `.d.ts` that disagrees with its implementation.
+ * Assembled rather than written out, so installing something is what makes it available and
+ * removing it is what takes it away. A prompt that lists capabilities regardless of what is
+ * installed is the same class of bug as a `.d.ts` that disagrees with its implementation.
  */
-export function describeTalents(talents: { name: string; actions: TalentAction[] }[]): string {
-  const lines: string[] = [];
-  for (const t of talents) {
-    for (const a of t.actions) {
-      lines.push(`- ${a.id} (${t.name}): ${a.title}`);
-    }
+export function describeTalents(installedIds: string[]): {
+  actions: TalentAction[];
+  text: string;
+} {
+  const actions: TalentAction[] = [];
+  for (const id of installedIds) {
+    const t = talentFor(id);
+    if (t) actions.push(...t.actions);
   }
-  return lines.join('\n');
+  return {
+    actions,
+    text: actions.map((a) => `- ${a.id}: ${a.title}`).join('\n'),
+  };
 }
