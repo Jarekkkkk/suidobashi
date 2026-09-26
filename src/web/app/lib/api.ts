@@ -21,10 +21,20 @@ export type Event = {
 
 export const TOKEN = document.body.dataset.token ?? '';
 
-/** Every call carries the token. Without it the server answers 403. */
-export async function api<T = unknown>(path: string, body?: unknown): Promise<T> {
+/**
+ * Every call carries the token. Without it the server answers 403.
+ *
+ * The method is explicit for anything that is not a read or a create: `body ? 'POST' : 'GET'`
+ * cannot express PATCH or DELETE, and both of those take no body — so inferring from one would
+ * send the wrong verb for a request that looked perfectly reasonable at the call site.
+ */
+export async function api<T = unknown>(
+  path: string,
+  body?: unknown,
+  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+): Promise<T> {
   const res = await fetch(path, {
-    method: body ? 'POST' : 'GET',
+    method: method ?? (body ? 'POST' : 'GET'),
     headers: body
       ? { 'Content-Type': 'application/json', 'x-agent-token': TOKEN }
       : { 'x-agent-token': TOKEN },

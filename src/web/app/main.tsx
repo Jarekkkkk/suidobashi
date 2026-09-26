@@ -97,20 +97,27 @@ function App() {
     }
   }, []);
 
-  // There is always a chat, so nothing said is lost for want of somewhere to put it. The newest
-  // one if there is one, a fresh one otherwise.
-  useEffect(() => {
-    void (async () => {
-      try {
-        const r = await api<{ chats: { id: string }[] }>('/api/chats');
-        if (r.chats.length > 0) return void openChat(r.chats[0].id);
-        const c = await api<{ id: string }>('/api/chats', { title: 'new chat' });
-        setChatId(c.id);
-      } catch {
-        setNote('could not reach local storage');
-      }
-    })();
+  /**
+   * Land somewhere real: the newest chat if there is one, a fresh one otherwise.
+   *
+   * Used on mount AND after a delete, because they are the same question — "where should the
+   * user be now?" — and two copies would be two places for the answer to change.
+   *
+   * There is always a chat, so nothing said is lost for want of somewhere to put it.
+   */
+  const settle = useCallback(async () => {
+    try {
+      const r = await api<{ chats: { id: string }[] }>('/api/chats');
+      if (r.chats.length > 0) return void openChat(r.chats[0].id);
+      const c = await api<{ id: string }>('/api/chats', { title: 'new chat' });
+      setEvents([]);
+      setChatId(c.id);
+    } catch {
+      setNote('could not reach local storage');
+    }
   }, [openChat]);
+
+  useEffect(() => { void settle(); }, [settle]);
 
   // Follow the wallet's own connection state rather than tracking it locally: the user can
   // disconnect from the extension, and a stale address here would let them try to sign.
@@ -152,6 +159,7 @@ function App() {
           chatId={chatId}
           onSelectChat={(id) => void openChat(id)}
           onNewChat={(id) => { setChatId(id); setEvents([]); }}
+          onChatDeleted={() => void settle()}
         />
       </aside>
 

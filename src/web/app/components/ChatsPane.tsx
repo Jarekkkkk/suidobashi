@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Plus } from 'lucide-react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { Plus, Pencil, Trash2 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -30,13 +30,22 @@ export function ChatsPane({
   current,
   onSelect,
   onNew,
+  onDeleted,
 }: {
   current: string | null;
   onSelect: (id: string) => void;
   onNew: (id: string) => void;
+  /** Called when the OPEN chat was the one deleted, so the app can move somewhere real. */
+  onDeleted: () => void;
 }) {
   const [chats, setChats] = useState<Chat[] | null>(null);
   const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState('');
+  /** The row whose delete is one click from happening. Not a browser confirm: this is a list,
+      and the second click is the confirmation. */
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const editRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
     try {
@@ -49,6 +58,12 @@ export function ChatsPane({
 
   useEffect(() => { void load(); }, [load]);
 
+  // Focus the field the moment it appears, so renaming is one click and typing rather than
+  // click, find, click.
+  useEffect(() => {
+    if (editing) editRef.current?.select();
+  }, [editing]);
+
   async function create() {
     if (busy) return;
     setBusy(true);
@@ -59,6 +74,27 @@ export function ChatsPane({
     } finally {
       setBusy(false);
     }
+  }
+
+  async function saveTitle(id: string) {
+    const title = draft.trim();
+    setEditing(null);
+    // Nothing to do if it is unchanged or empty. The server refuses an empty one too; not
+    // sending it saves a round trip that could only fail.
+    if (!title) return;
+    const existing = chats?.find((c) => c.id === id);
+    if (existing?.title === title) return;
+    await api(`/api/chats/${id}`, { title }, 'PATCH');
+    await load();
+  }
+
+  async function remove(id: string) {
+    setConfirming(null);
+    await api(`/api/chats/${id}`, undefined, 'DELETE');
+    await load();
+    // If that was the open chat, the transcript on screen is gone. Say so, and let the app pick
+    // another rather than leaving the user typing into a conversation that no longer exists.
+    if (id === current) onDeleted();
   }
 
   return (
@@ -91,26 +127,97 @@ export function ChatsPane({
         )}
 
         <ul className="flex flex-col gap-1">
-          {(chats ?? []).map((c) => (
-            <li key={c.id}>
-              <button
-                onClick={() => onSelect(c.id)}
-                className={cn(
-                  'w-full rounded-md px-2.5 py-2 text-left transition-colors',
-                  c.id === current
-                    ? 'bg-accent text-accent-foreground'
-                    : 'hover:bg-accent/50 text-muted-foreground hover:text-foreground',
+          {(chats ?? []).map((c) => {
+            const isCurrent = c.id === current;
+            const isEditing = editing === c.id;
+            const isConfirming = confirming === c.id;
+
+            return (
+              <li key={c.id} className="group relative">
+                {isEditing ? (
+                  <input
+                    ref={editRef}
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onBlur={() => void saveTitle(c.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') void saveTitle(c.id);
+                      // Escape abandons the edit, which is what Escape means everywhere else.
+                      if (e.key === 'Escape') setEditing(null);
+                    }}
+                    maxLength={80}
+                    className={cn(
+                      'w-full rounded-md border border-brand/60 bg-background px-2.5 py-2',
+                      'text-[12px] text-foreground outline-none',
+                    )}
+                  />
+                ) : (
+                  <button
+                    onClick={() => onSelect(c.id)}
+                    onDoubleClick={() => { setDraft(c.title); setEditing(c.id); }}
+                    className={cn(
+                      'w-full rounded-md px-2.5 py-2 text-left transition-colors',
+                      isCurrent
+                        ? 'bg-accent text-accent-foreground'
+                        : 'hover:bg-accent/50 text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    <div className="flex items-baseline gap-2">
+                      <span className="min-w-0 flex-1 truncate text-[12px]">{c.title}</span>
+                      <span className={cn(
+                        'shrink-0 text-[10px] text-muted-foreground/60',
+                        // The actions replace the timestamp on hover, so the row does not grow.
+                        'group-hover:opacity-0',
+                      )}>
+                        {ago(c.updatedAt)}
+                      </span>
+                    </div>
+                  </button>
                 )}
-              >
-                <div className="flex items-baseline gap-2">
-                  <span className="min-w-0 flex-1 truncate text-[12px]">{c.title}</span>
-                  <span className="shrink-0 text-[10px] text-muted-foreground/60">
-                    {ago(c.updatedAt)}
-                  </span>
-                </div>
-              </button>
-            </li>
-          ))}
+
+                {/* Hover actions. `opacity-0 group-hover:opacity-100` rather than conditionally
+                    rendering, so the row never changes size under the cursor. */}
+                {!isEditing && (
+                  <div className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-6 w-6"
+                      title="rename"
+                      aria-label={`rename ${c.title}`}
+                      onClick={() => { setDraft(c.title); setEditing(c.id); }}
+                    >
+                      <Pencil size={12} />
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-6 w-6"
+                      title={isConfirming ? 'click again to delete' : 'delete'}
+                      aria-label={`delete ${c.title}`}
+                      onClick={() => (isConfirming ? void remove(c.id) : setConfirming(c.id))}
+                    >
+                      <Trash2 size={12} className={cn(isConfirming && 'text-destructive')} />
+                    </Button>
+                  </div>
+                )}
+
+                {/* The second click. Overlays the row rather than replacing it, so the target
+                    does not move between the two clicks. */}
+                {isConfirming && (
+                  <div className="absolute inset-0 flex items-center justify-between rounded-md bg-destructive/15 px-2.5">
+                    <span className="text-[11px] text-destructive">delete this chat?</span>
+                    <div className="flex items-center gap-1">
+                      <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]"
+                        onClick={() => setConfirming(null)}>keep</Button>
+                      <Button size="sm" variant="destructive" className="h-6 px-2 text-[11px]"
+                        onClick={() => void remove(c.id)}>delete</Button>
+                    </div>
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ul>
       </div>
     </div>

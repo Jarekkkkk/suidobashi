@@ -84,6 +84,25 @@ function Pill({ tone, children }: { tone: 'muted' | 'chain' | 'advisory'; childr
   );
 }
 
+/**
+ * What this pane needs from the app.
+ *
+ * Named rather than written inline, because it is seven fields and because the app passes every
+ * one of them by name — an inline type makes the contract visible only from inside the component
+ * that consumes it, which is the wrong side of the boundary.
+ */
+export type LeftPaneProps = {
+  events: Event[];
+  say: Say;
+  onTerms: OnTerms;
+  /** The open conversation, or null before the first one exists. */
+  chatId: string | null;
+  onSelectChat: (id: string) => void;
+  onNewChat: (id: string) => void;
+  /** The OPEN chat was deleted, so the transcript on screen is gone. */
+  onChatDeleted: () => void;
+};
+
 export function LeftPane({
   events,
   say,
@@ -91,14 +110,8 @@ export function LeftPane({
   chatId,
   onSelectChat,
   onNewChat,
-}: {
-  events: Event[];
-  say: Say;
-  onTerms: OnTerms;
-  chatId: string | null;
-  onSelectChat: (id: string) => void;
-  onNewChat: (id: string) => void;
-}) {
+  onChatDeleted,
+}: LeftPaneProps) {
   // Chats first: it is the tab you return to, and the one that says what the app is for.
   const [tab, setTab] = useState<'chats' | 'talents' | 'notifications'>('chats');
   const [out, setOut] = useState<Outstanding | null>(null);
@@ -253,7 +266,12 @@ export function LeftPane({
         {/* No padding: ChatsPane is a full-height list with its own header and scroll area, and
             an outer inset stopped it reaching the pane's edges. */}
         {tab === 'chats' && (
-          <ChatsPane current={chatId} onSelect={onSelectChat} onNew={onNewChat} />
+          <ChatsPane
+            current={chatId}
+            onSelect={onSelectChat}
+            onNew={onNewChat}
+            onDeleted={onChatDeleted}
+          />
         )}
 
         {tab === 'talents' && (

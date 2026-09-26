@@ -107,6 +107,17 @@ export function getChat(id: string): Chat | null {
   ).get(id) as Chat | undefined) ?? null;
 }
 
+/**
+ * Rename a conversation.
+ *
+ * `updated_at` is deliberately NOT touched. That column orders the chat list by activity, and
+ * renaming is not activity — a chat renamed today should not jump to the top of a list sorted by
+ * when it was last USED.
+ */
+export function renameChat(id: string, title: string) {
+  open().run('UPDATE chats SET title = ? WHERE id = ?', [title, id]);
+}
+
 export function deleteChat(id: string) {
   open().run('DELETE FROM chats WHERE id = ?', [id]);
 }

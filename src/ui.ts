@@ -26,7 +26,7 @@ import { HIRES } from './hires.js';
 import { findCreatedGuard, repointAddresses } from './guard-id.js';
 import { event, endingFor, type EventKind } from './web/events.js';
 import {
-  listChats, createChat, getChat, deleteChat, messages, append,
+  listChats, createChat, getChat, renameChat, deleteChat, messages, append,
   listTalents, installTalent, uninstallTalent, dbPath,
 } from './db.js';
 import { unitsToUsdc } from './web/units.js';
@@ -1482,6 +1482,26 @@ const server = http.createServer((req, res) => {
         }
         if (!text) return send(400, JSON.stringify({ error: 'text required' }));
         return send(200, JSON.stringify(append(id, role, text)));
+      });
+      return;
+    }
+    if (req.method === 'PATCH' && id) {
+      let raw = '';
+      req.on('data', (c) => { raw += c; if (raw.length > 8192) req.destroy(); });
+      req.on('end', () => {
+        let title = '';
+        try {
+          const body = JSON.parse(raw || '{}');
+          title = String(body.title ?? '').trim();
+        } catch {
+          return send(400, JSON.stringify({ error: 'bad body' }));
+        }
+        // Refused rather than defaulted: an empty title is a mistake, and silently naming the
+        // chat "new chat" would hide it. Capped because it is a label in a narrow list.
+        if (!title) return send(400, JSON.stringify({ error: 'title required' }));
+        if (!getChat(id)) return send(404, JSON.stringify({ error: 'no such chat' }));
+        renameChat(id, title.slice(0, 80));
+        return send(200, JSON.stringify({ ok: true }));
       });
       return;
     }
