@@ -18,12 +18,15 @@ module sui_tokyo::order;
 use cetus_clmm::config::GlobalConfig;
 use cetus_clmm::pool::Pool;
 use sui_tokyo::policy::{Self, Policy};
+use sui_tokyo::spend_vault::{Self, Vault};
 use sui::balance::{Self, Balance};
 use sui::clock::Clock;
 use sui::coin::{Self, Coin};
 use sui::dynamic_field;
 use sui::event;
 
+#[error]
+const EExceedsAllowance: vector<u8> = "amount exceeds the maker's remaining allowance";
 #[error]
 const ENotAgent: vector<u8> = "caller is not the policy's agent";
 #[error]
@@ -178,6 +181,50 @@ public fun create_with_fee<CoinType>(
     if (fee_out > 0) dynamic_field::add(&mut order.id, FeeKey {}, fee_out);
     transfer::share_object(order);
     order_id
+}
+
+/// Create an order the maker's ALLOWANCE must cover.
+///
+/// This is the boundary the policy sheet shows. Without it the budget bounded only the vault
+/// path — `swap_and_route` — which nothing calls, while the escrow it was supposed to bound
+/// came straight out of the maker's wallet and was checked against nothing. A limit that reads
+/// as enforced but is not is worse than no limit, because a maker sizes a trade to it.
+///
+/// WHAT IT IS: a per-order CEILING. The remaining allowance is READ and compared to the amount
+/// being escrowed, so an order larger than the grant is refused before it is shared.
+///
+/// WHAT IT IS NOT: a spending total. The allowance is not decremented, so N orders of the same
+/// size each pass a grant that covers one. Decrementing would need `spend_vault::spend`, which
+/// takes `&mut Vault` and the `SpenderCap` embedded in the policy, and which returns a balance
+/// FROM THE VAULT — a different pot from the wallet this escrow comes out of. Making the budget
+/// bound TOTAL spend means moving the escrow into the vault, which is a change to where the
+/// funds live rather than a check added here.
+///
+/// A new function rather than a parameter on `create_with_fee`, because a compatible upgrade
+/// cannot change an existing public function's signature. Both route through `build`, so their
+/// validation cannot drift.
+public fun create_with_policy<CoinType>(
+policy: &Policy,
+vault: &Vault,
+coin: Coin<CoinType>,
+pool_id: ID,
+min_out: u64,
+fee_out: u64,
+expires_at_ms: u64,
+destination: address,
+clock: &Clock,
+ctx: &mut TxContext,
+): ID {
+let amount = coin.value();
+let remaining = spend_vault::allowance<CoinType>(vault, policy::cap_id(policy));
+// `remaining` is 0 both for "never granted" and for "suspended at zero", and for a
+// revoked cap. All three mean the same thing here: this order is not covered.
+assert!(remaining >= amount, EExceedsAllowance);
+
+let (mut order, order_id) = build(coin, pool_id, min_out, expires_at_ms, destination, clock, ctx);
+if (fee_out > 0) dynamic_field::add(&mut order.id, FeeKey {}, fee_out);
+transfer::share_object(order);
+order_id
 }
 
 /// Validate and construct an order. Shared by both entry points, so their validation

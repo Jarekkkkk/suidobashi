@@ -13,7 +13,7 @@ module sui_tokyo::order_tests;
 
 use sui_tokyo::order;
 use sui_tokyo::policy::{Self, Policy};
-use sui_tokyo::spend_vault::{Self, OwnerCap};
+use sui_tokyo::spend_vault::{Self, OwnerCap, Vault};
 use sui::clock::{Self, Clock};
 use sui::coin;
 use sui::test_scenario as ts;
@@ -24,6 +24,9 @@ const AGENT: address = @0xB;
 const STRANGER: address = @0xC;
 const NOW_MS: u64 = 1_700_000_000_000;
 const LATER_MS: u64 = NOW_MS + 86_400_000;
+/// The ledger's no-expiry sentinel. A test grant that expires would make the allowance bound
+/// untestable the moment the clock moved.
+const NO_EXPIRY_MS: u64 = 0xFFFF_FFFF_FFFF_FFFF;
 
 /// Distinct defining type, so nothing collides with the policy tests.
 public struct OrderTestCoin has drop {}
@@ -59,6 +62,111 @@ fun setup_policy(s: &mut ts::Scenario, pool: ID): ID {
         ts::return_shared(p);
     };
     policy_id
+}
+
+/// A policy AND its vault, because the allowance bound needs both: the ledger lives on the vault
+/// and the cap id that keys it lives on the policy. `setup_policy` predates that need and returns
+/// only the policy, so this is a second helper rather than a change to it — the existing tests do
+/// not need a vault and should not have to take one.
+fun setup_policy_and_vault(s: &mut ts::Scenario, pool: ID): (ID, ID) {
+    let (v, oc) = spend_vault::new(s.ctx());
+    let vault_id = object::id(&v);
+    let cap = spend_vault::mint_cap(&v, &oc, s.ctx());
+    let policy_id = policy::create(&v, &oc, AGENT, MAKER, cap, s.ctx());
+    spend_vault::share(v);
+    transfer::public_transfer(oc, MAKER);
+
+    s.next_tx(MAKER);
+    {
+        // `s` is already `&mut Scenario` here, which coerces to the `&Scenario` the native wants.
+        // In a TEST BODY `s` is a `Scenario` by value, so those call sites need `&s`. Getting this
+        // backwards is a compile error in one direction and a silent corruption of every other
+        // test in the file if fixed with a global replace.
+        let mut p = ts::take_shared_by_id<Policy>(s, policy_id);
+        let oc2 = ts::take_from_address<OwnerCap>(s, MAKER);
+        policy::set_pool_allowed(&mut p, &oc2, pool, true);
+        ts::return_to_address(MAKER, oc2);
+        ts::return_shared(p);
+    };
+    (policy_id, vault_id)
+}
+
+/// Grant `amount` against the policy's cap, in one transaction.
+fun grant(s: &mut ts::Scenario, policy_id: ID, vault_id: ID, amount: u64) {
+    let mut v = ts::take_shared_by_id<Vault>(s, vault_id);
+    let p = ts::take_shared_by_id<Policy>(s, policy_id);
+    let oc = ts::take_from_address<OwnerCap>(s, MAKER);
+    let clk = ts::take_shared<Clock>(s);
+    spend_vault::set_allowance<OrderTestCoin>(
+        &mut v, &oc, policy::cap_id(&p), amount, NO_EXPIRY_MS, std::option::none(), &clk, s.ctx(),
+    );
+    ts::return_shared(clk);
+    ts::return_to_address(MAKER, oc);
+    ts::return_shared(p);
+    ts::return_shared(v);
+}
+
+/// An order larger than the remaining allowance is refused.
+///
+/// This is the boundary the policy sheet shows. Without it the budget bounded only the vault
+/// path — which nothing calls — while the escrow it was supposed to bound came out of the maker's
+/// wallet and was checked against nothing.
+#[test]
+#[expected_failure(abort_code = order::EExceedsAllowance)]
+fun create_with_policy_refuses_an_amount_above_the_allowance() {
+    let mut s = ts::begin(MAKER);
+    share_clock(&mut s, NOW_MS);
+    let (policy_id, vault_id) = setup_policy_and_vault(&mut s, pool_a());
+    s.next_tx(MAKER);
+    grant(&mut s, policy_id, vault_id, 100);
+
+    s.next_tx(MAKER);
+    let clk = ts::take_shared<Clock>(&s);
+    let p = ts::take_shared_by_id<Policy>(&s, policy_id);
+    let v = ts::take_shared_by_id<Vault>(&s, vault_id);
+    order::create_with_policy<OrderTestCoin>(
+        &p, &v,
+        coin::mint_for_testing<OrderTestCoin>(101, s.ctx()),
+        pool_a(), 1, 0, LATER_MS, MAKER, &clk, s.ctx(),
+    );
+    ts::return_shared(clk);
+    ts::return_shared(p);
+    ts::return_shared(v);
+    s.end();
+}
+
+/// The boundary is INCLUSIVE: an order of exactly the allowance is allowed.
+///
+/// This is the test that catches an off-by-one, which the refusal test alone cannot — `>=` and `>`
+/// differ only here, and only one of them matches what the sheet claims.
+#[test]
+fun create_with_policy_allows_exactly_the_allowance() {
+    let mut s = ts::begin(MAKER);
+    share_clock(&mut s, NOW_MS);
+    let (policy_id, vault_id) = setup_policy_and_vault(&mut s, pool_a());
+    s.next_tx(MAKER);
+    grant(&mut s, policy_id, vault_id, 100);
+
+    s.next_tx(MAKER);
+    let clk = ts::take_shared<Clock>(&s);
+    let p = ts::take_shared_by_id<Policy>(&s, policy_id);
+    let v = ts::take_shared_by_id<Vault>(&s, vault_id);
+    let order_id = order::create_with_policy<OrderTestCoin>(
+        &p, &v,
+        coin::mint_for_testing<OrderTestCoin>(100, s.ctx()),
+        pool_a(), 1, 0, LATER_MS, MAKER, &clk, s.ctx(),
+    );
+    ts::return_shared(clk);
+    ts::return_shared(p);
+    ts::return_shared(v);
+
+    // The order exists and escrowed the whole amount, so the bound did not also break creation.
+    s.next_tx(MAKER);
+    let o = ts::take_shared_by_id<order::Order<OrderTestCoin>>(&s, order_id);
+    assert_eq!(order::amount_in(&o), 100);
+    assert_eq!(order::maker(&o), MAKER);
+    ts::return_shared(o);
+    s.end();
 }
 
 // === creating ===
