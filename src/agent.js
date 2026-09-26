@@ -211,7 +211,7 @@ function selectHire(text) {
  * A missing or ungrounded direction is a refusal, never a default. Refusing on
  * ambiguity is the entire job of this function.
  */
-function validate(intent, amountMist, { vaultSuiMist, text, hire, policy }) {
+function validate(intent, amountMist, { walletSuiMist, text, hire, policy }) {
   if (!intent || typeof intent !== 'object') return { ok: false, reason: 'not an object' };
   if (!ACTIONS.includes(intent.action)) {
     return { ok: false, reason: `action "${intent.action}" is not in the allowlist` };
@@ -279,10 +279,11 @@ function validate(intent, amountMist, { vaultSuiMist, text, hire, policy }) {
   // The hire was already chosen from the request text by the caller, and the
   // venue read from its policy, so both are settled by the time this runs. What
   // the model put in its `agent` field is deliberately not consulted.
-  if (amountMist > 0n && amountMist > vaultSuiMist) {
+  if (amountMist > 0n && amountMist > walletSuiMist) {
     return {
       ok: false,
-      reason: `amount ${amountMist} exceeds the vault balance ${vaultSuiMist} — the chain would refuse it anyway`,
+      reason: `amount ${amountMist} exceeds your wallet balance ${walletSuiMist} — `
+        + 'the escrow would have nothing to draw from',
     };
   }
   if ((intent.action === 'swap' || intent.action === 'deposit_liquidity') && amountMist <= 0n) {
@@ -357,7 +358,16 @@ async function policyState(hire) {
   }
 }
 
-async function vaultBalanceMist() {
+/**
+ * The SENDER's spendable SUI — what a maker escrows from.
+ *
+ * It used to read the VAULT balance, because the vault was where a swap's funds came
+ * from. Escrowed orders do not touch the vault: the maker escrows from their own wallet
+ * and the order holds it. So the check was comparing against the wrong pool of money,
+ * and refused every chat-typed swap with "exceeds the vault balance 0" while the order
+ * form worked fine — two paths, two funding requirements, and the gate only knew one.
+ */
+async function walletBalanceMist() {
   // A fixed balance, for the acceptance check ONLY.
   //
   // The gate's balance comparison is ADVISORY -- the chain enforces the real
@@ -366,16 +376,21 @@ async function vaultBalanceMist() {
   // depend on the vault happening to be funded, and a check that goes red when the
   // state legitimately changes -- an owner withdrawing before an upgrade, say -- is a
   // check people learn to ignore.
-  const override = process.env.AGENT_VAULT_BALANCE_MIST;
+  const override = process.env.AGENT_WALLET_BALANCE_MIST;
   if (override !== undefined) return BigInt(override);
 
   const { SuiGrpcClient } = await import('@mysten/sui/grpc');
-  const { VAULT_ID } = await import('./addresses.js');
   const client = new SuiGrpcClient({
     network: 'mainnet',
     baseUrl: 'https://fullnode.mainnet.sui.io:443',
   });
-  const b = await client.getBalance({ owner: VAULT_ID, coinType: '0x2::sui::SUI' });
+  // Imported here rather than at the top, matching how this file already reaches
+  // addresses.js. Using a name that was never imported is what broke every real run
+  // while the test suite stayed green — the suite injects a balance, so this function
+  // returned early and the missing name was never evaluated.
+  const { DEPLOYER } = await import('./addresses.js');
+  const sender = process.env.SUI_SENDER || DEPLOYER;
+  const b = await client.getBalance({ owner: sender, coinType: '0x2::sui::SUI' });
   return BigInt(b.balance?.balance ?? 0);
 }
 
@@ -389,7 +404,7 @@ async function main() {
   }
 
   const { intent, finishReason } = await parseIntent(text);
-  const vaultSuiMist = await vaultBalanceMist();
+  const walletSuiMist = await walletBalanceMist();
 
   // The model extracted a literal; the arithmetic is ours and exact.
   const parsed = parseAmountText(intent.amountText);
@@ -403,7 +418,7 @@ async function main() {
   let verdict;
   if (!hirePick.ok) verdict = { ok: false, reason: hirePick.reason };
   else if (!parsed.ok) verdict = { ok: false, reason: parsed.reason };
-  else verdict = validate(intent, amountMist, { vaultSuiMist, text, hire, policy });
+  else verdict = validate(intent, amountMist, { walletSuiMist, text, hire, policy });
 
   let decidedBy;
   if (hirePick.named.length === 1) decidedBy = `request text names "${hirePick.named[0]}"`;
@@ -436,7 +451,7 @@ async function main() {
       consulted: false,
     },
     amountMist: amountMist === null ? null : amountMist.toString(),
-    vaultBalanceMist: vaultSuiMist.toString(),
+    walletBalanceMist: walletSuiMist.toString(),
     validation: verdict,
   };
 

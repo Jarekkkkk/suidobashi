@@ -8,12 +8,14 @@
  * Every case is a mainnet simulation inside agent.js; nothing is signed and
  * nothing is submitted, so this costs nothing to run.
  *
- * HERMETIC: the vault balance is injected rather than read, so the outcome does not
- * depend on whether the vault happens to be funded. That matters because the owner
- * legitimately empties the vault before a package upgrade, and the happy-path cases
- * would otherwise fail for a reason that has nothing to do with the gate. The gate's
- * balance check is advisory -- the chain enforces the real balance -- so injecting it
- * cannot hide a fund-safety problem.
+ * HERMETIC: the wallet balance is injected rather than read, so the outcome does not
+ * depend on how much the maker happens to be holding. That matters because the owner
+ * legitimately moves funds around, and the happy-path cases would otherwise fail for a
+ * reason that has nothing to do with the gate. The gate's balance check is advisory —
+ * the chain enforces the real balance — so injecting it cannot hide a fund-safety problem.
+ *
+ * It reads the SENDER's balance, not the vault's: escrowed orders do not touch the vault,
+ * so the vault was the wrong pool of money to compare against.
  *
  * STILL STATE-DEPENDENT, and unavoidably so: both hires must be active and their
  * venues allowlisted, because that state is read from the chain. Case 2 expects a
@@ -26,7 +28,7 @@
 import { spawnSync } from 'node:child_process';
 
 /** 0.1 SUI. Above every happy-path amount below, below the deliberate over-budget one. */
-const INJECTED_VAULT_MIST = '100000000';
+const INJECTED_WALLET_MIST = '100000000';
 
 const CASES = [
   {
@@ -46,8 +48,8 @@ const CASES = [
   },
   {
     text: 'swap 5 SUI to USDC',
-    why: 'over budget must refuse for the BALANCE reason, not a stray one',
-    expect: { decision: 'REFUSED', reasonHas: 'exceeds the vault balance' },
+    why: 'over the balance must refuse for the BALANCE reason, not a stray one',
+    expect: { decision: 'REFUSED', reasonHas: 'exceeds your wallet balance' },
   },
   {
     text: 'swap 0.01 USDC to SUI',
@@ -75,9 +77,8 @@ function run(text) {
   const r = spawnSync('node', ['src/agent.js', text], {
     encoding: 'utf-8',
     timeout: 300_000,
-    env: { ...process.env, AGENT_VAULT_BALANCE_MIST: INJECTED_VAULT_MIST },
-  });
-  const out = r.stdout || '';
+    env: { ...process.env, AGENT_WALLET_BALANCE_MIST: INJECTED_WALLET_MIST },
+  });  const out = r.stdout || '';
   const start = out.indexOf('{');
   for (let end = out.length; end > start && start >= 0; end--) {
     try {
@@ -126,5 +127,41 @@ for (const c of CASES) {
   }
 }
 
-console.log(`\n${CASES.length - failed}/${CASES.length} passed`);
+// 9. THE REAL READ PATH, without an injected balance.
+//
+// The injection makes every case above hermetic, which is right — but it also means a
+// bug in the un-injected path is invisible to them. This caught exactly that: a missing
+// import made every real run die with "DEPLOYER is not defined" while the suite stayed
+// green, because the injected value made the broken function return before reaching the
+// missing name.
+//
+// It asserts only that the agent PRODUCED a verdict, not what the verdict is — the real
+// balance varies, and the point here is that the path runs at all.
+let realVerdict = null;
+try {
+  const r = spawnSync('node', ['src/agent.js', 'swap 0.005 SUI to USDC'], {
+    encoding: 'utf-8',
+    timeout: 300_000,
+    // The override is DELETED, not set to undefined: spawnSync stringifies env values,
+    // so `{ KEY: undefined }` arrives as the literal string "undefined" and BigInt would
+    // throw — failing this check for a reason that has nothing to do with what it tests.
+    env: (({ AGENT_WALLET_BALANCE_MIST: _drop, ...rest }) => rest)(process.env),
+  });
+  const out = r.stdout || '';
+  const start = out.indexOf('{');
+  for (let end = out.length; end > start && start >= 0; end--) {
+    try { realVerdict = JSON.parse(out.slice(start, end)); break; } catch { /* keep shrinking */ }
+  }
+  if (!realVerdict) {
+    console.log('FAIL  the agent runs without an injected balance');
+    console.log(`      no verdict — stderr: ${(r.stderr || '').trim().slice(0, 160)}`);
+    failed++;
+  }
+} catch (e) {
+  console.log('FAIL  the agent runs without an injected balance');
+  console.log(`      ${e.message}`);
+  failed++;
+}
+
+console.log(`\n${CASES.length + 1 - failed}/${CASES.length + 1} passed`);
 process.exit(failed ? 1 : 0);
