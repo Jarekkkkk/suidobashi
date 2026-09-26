@@ -419,17 +419,23 @@ export function depositSuiTx(tx: Transaction, balanceManager: SharedRef, amountM
 }
 
 /**
- * Empty the account back to an address, by DeepBook's owner path again — the exit that needs no
- * capability, no guard and no cooperation from this module or the agent.
+ * Empty ONE asset out of the account, back to an address, by DeepBook's owner path — the exit that
+ * needs no capability, no guard, and no cooperation from this module or the agent.
+ *
+ * By coin TYPE rather than SUI alone. A ladder leaves behind whichever asset it was not quoting: an
+ * ask ladder sells SUI and leaves USDC, a bid ladder does the reverse. A withdrawal that knows only
+ * SUI therefore strands half of every account it drains, which is not a theoretical problem — it
+ * stranded this one. The owner can always take it on chain; the point of the flag is taking it here.
  */
-export function withdrawAllSuiTx(
+export function withdrawAllTx(
   tx: Transaction,
   balanceManager: SharedRef,
+  coinType: string,
   recipient: string,
 ) {
   const coin = tx.moveCall({
     target: `${DEEPBOOK_PACKAGE}::balance_manager::withdraw_all`,
-    typeArguments: [SUI_TYPE],
+    typeArguments: [coinType],
     arguments: [tx.sharedObjectRef(balanceManager)],
   });
   tx.transferObjects([coin], tx.pure.address(recipient));

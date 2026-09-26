@@ -31,7 +31,7 @@
 import 'dotenv/config';
 import { SuiGrpcClient } from '@mysten/sui/grpc';
 import { Transaction } from '@mysten/sui/transactions';
-import { USDC_TYPE } from './addresses.js';
+import { COINS, USDC_TYPE } from './addresses.js';
 import {
   CLOCK_ID,
   DEEPBOOK_POOL_ID,
@@ -44,7 +44,7 @@ import {
   quantityScale,
   sellTx,
   sharedVersionOf,
-  withdrawAllSuiTx,
+  withdrawAllTx,
   type OrderRefs,
   type SharedRef,
 } from './deepbook.js';
@@ -361,10 +361,17 @@ async function main() {
 
     case 'withdraw': {
       const bm = flag('--bm');
+      const symbol = flag('--coin', 'SUI');
       if (!bm) fail('--bm is required');
+      const spec = COINS[symbol];
+      if (!spec) fail(`--coin must be one of ${Object.keys(COINS).join(', ')} (got "${symbol}")`);
       const tx = new Transaction();
-      withdrawAllSuiTx(tx, await bmRef(bm!), OWNER);
-      await run(tx, { recipient: OWNER, note_withdraw: 'owner path, no capability, no guard' });
+      withdrawAllTx(tx, await bmRef(bm!), spec.type, OWNER);
+      await run(tx, {
+        coin: symbol,
+        recipient: OWNER,
+        note_withdraw: 'owner path, no capability, no guard',
+      });
       return;
     }
 
