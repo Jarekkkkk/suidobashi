@@ -249,13 +249,15 @@ export function LeftPane({
         </p>
       )}
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-3">
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {/* No padding: ChatsPane is a full-height list with its own header and scroll area, and
+            an outer inset stopped it reaching the pane's edges. */}
         {tab === 'chats' && (
           <ChatsPane current={chatId} onSelect={onSelectChat} onNew={onNewChat} />
         )}
 
         {tab === 'talents' && (
-          <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-3 p-3">
             {/*
               WHAT THIS TAB SHOWS, and the distinction is worth stating rather than implying.
 
@@ -339,7 +341,7 @@ export function LeftPane({
         )}
 
         {tab === 'notifications' && (
-          <>
+          <div className="p-3">
             {out && outstanding.length === 0 && (
               <div className="rounded-lg border border-dashed border-border px-3 py-6 text-center">
                 <p className="text-[12px] text-muted-foreground">Nothing needs attention.</p>
@@ -392,7 +394,7 @@ export function LeftPane({
                 snapshot · {out.scanned} scanned · {out.orderObjects} on chain
               </p>
             )}
-          </>
+          </div>
         )}
       </div>
 

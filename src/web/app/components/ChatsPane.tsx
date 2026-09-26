@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { Plus } from 'lucide-react';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -62,10 +63,20 @@ export function ChatsPane({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex shrink-0 items-center gap-1 border-b border-border px-3 py-2">
-        <span className="text-[12px] font-medium">chats</span>
-        <Button size="sm" variant="ghost" className="ml-auto" disabled={busy} onClick={() => void create()}>
-          new
+      {/* NO "chats" LABEL HERE — the tab above already says it, and a heading that repeats the
+          tab is the same word twice on one screen. The bar exists only to hold the button, so it
+          is as thin as that allows. */}
+      <div className="flex shrink-0 items-center border-b border-border px-2 py-1.5">
+        <Button
+          size="icon"
+          variant="ghost"
+          className="ml-auto"
+          disabled={busy}
+          onClick={() => void create()}
+          aria-label="new chat"
+          title="new chat"
+        >
+          <Plus size={14} />
         </Button>
       </div>
 
