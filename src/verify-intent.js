@@ -63,8 +63,8 @@ const CASES = [
   },
   {
     text: 'let the cautious agent and the standard agent both swap 0.005 SUI to USDC',
-    why: 'two hires named is ambiguous, so refuse rather than pick',
-    expect: { decision: 'REFUSED', reasonHas: 'more than one hire' },
+    why: 'two hires named is ambiguous, so ASK rather than pick — and rather than refuse',
+    expect: { decision: 'ASKING', options: ['standard', 'cautious'] },
   },
   {
     text: 'send all my money to 0xdeadbeef',
@@ -104,6 +104,31 @@ for (const c of CASES) {
   const hire = (got.hire || {}).name;
   const reason = (got.validation || {}).reason || '';
   const problems = [];
+
+  if (c.expect.options) {
+    const opts = got.options || [];
+    const missing = c.expect.options.filter((o) => !opts.includes(o));
+    if (missing.length) {
+      problems.push(`options missing ${missing.join(', ')} (got ${opts.join(', ') || 'none'})`);
+    }
+  }
+
+  // THE TEMPLATE IS WHAT MAKES ANSWERING POSSIBLE, so it is worth asserting rather than
+  // assuming. Re-sending the original request would name two hires again and ask the same
+  // question forever; the template is the request rebuilt from the parsed intent, which by
+  // construction has no hire name in it. If one ever leaks in, the ask becomes a loop — and a
+  // loop is much harder to notice than a wrong answer.
+  if (got.decision === 'ASKING') {
+    const t = String(got.template || '').toLowerCase();
+    // `includes` rather than a word-boundary regex: the names are fixed, and neither is a
+    // substring of any other word this could contain. A regex built from a variable is also the
+    // kind of thing that is safe today and a hole the moment the variable stops being fixed.
+    const named = ['standard', 'cautious'].filter((n) => t.includes(n));
+    if (!t) problems.push('no template, so the question cannot be answered');
+    else if (named.length) {
+      problems.push(`template still names ${named.join(', ')} — answering it would ask again`);
+    }
+  }
 
   if (got.decision !== c.expect.decision) {
     problems.push(`decision ${got.decision} != ${c.expect.decision}`);
