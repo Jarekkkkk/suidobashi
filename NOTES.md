@@ -25,6 +25,16 @@ the budget is authority, and they are not the same number.
 
 ### Proven on mainnet, by real transactions
 
+- **The whole guard loop, end to end.** `setup` `DHyecWbaGo9bfXz1ehqSXtv9EWsgHrG8jM72vthKQC3t`
+  (account + guard in ONE transaction, owned by the deployer), `deposit`
+  `BJNxb9PZYBXCMysoUnWRMdvNQUg21QmKtBnp5i1UJFn6` (1.5 SUI, DeepBook's owner path), **`order`
+  `9th71XHveLgGRqyHC8wdijadCLNxQunuBSSZqM9hxqoM`** (a 1 SUI sell through the guard's agent gate,
+  resting on the book), `cancel` `HDJbkXFKuWK2cKhBeNH3Hizq7EqwcyVJaih415Efs4GX`,
+  `withdraw` `5CpNZzLw2myEw2sV2yhZS4LXVtQaY3jWgCAsgsXKrGW4`. Read back afterwards: 0 open orders,
+  BalanceManager empty, and `committed` still `1e9` — the budget is monotone and did not refund on
+  cancel, which is the documented behaviour and now a chain's word for it.
+- The first real order was refused six times before it was placed, and every refusal was the answer
+  to a question: below 0.8 SUI is `EOrderBelowMinimumSize`, and this pool's minimum order is 1 SUI.
 - The guard wraps a real DeepBook account: account AND guard in one transaction,
   `BFiuucS2ZV2VSN3W7PGZgQqepG2BfzJyLRCc1ansWrBm` — BalanceManager `0x2496c9d2…` shared by that call,
   guard `0x4d093945…`. Funded by `6tNiEhsG7YHa9ezr9osfBT1yDre2UjCyGgMhsqfvL9qY`, DeepBook's own
@@ -683,6 +693,15 @@ tried, and what any UI flow must not try either.
 `EInvalidExpireTimestamp` (code 3). Found by a probe: ten quantities were checked, every one of them
 failed, and the quantity was not the reason — the expiry was. "No expiry" is a timestamp far in the
 future, not an absent one.
+
+**A shared-object reference built from a GUESSED `initialSharedVersion` reads STALE state, silently.**
+Checking the guard just after a cancel, I built the object references with invented version numbers
+and the simulation reported the order as still open — on a chain where it had just been cancelled,
+and where the same read with the SDK resolving the objects itself said `0` open orders. Nothing
+aborts: the runtime resolves the object and reads what it has, so a wrong version is not an error,
+it is a quietly older answer, and it looks exactly like a transaction that did not work. The explicit
+version is the right convention here (`settle-order.ts`), but it has to be the REAL one, read from
+the object, or left to the SDK.
 
 ## Mainnet feature flags (protocol 136, read from the node)
 
