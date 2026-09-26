@@ -259,6 +259,30 @@ for (const token of ['--background', '--foreground', '--sidebar', '--card', '--b
     'a token behind a selector nothing applies is a token that does not exist');
 }
 
+// THE FOLD MUST NOT HIDE AN ENDING.
+//
+// `answered` was missing from TERMINAL_KINDS, so every capabilities answer was classified as
+// progress — counted as a step and folded away. The user's questions survived and the answers to
+// them did not, and it read as the app having lost the replies.
+//
+// The two lists live in different files, which is exactly why they drifted: one is the vocabulary
+// and the other is a rendering decision. Read from the source rather than imported, so the check
+// sees what is actually shipped.
+{
+  const chatSrc = fs.readFileSync(
+    new URL('./web/app/components/Chat.tsx', import.meta.url), 'utf-8');
+  const block = chatSrc.match(/const PROGRESS_KINDS = new Set\(\[([\s\S]*?)\]\)/)?.[1] ?? '';
+  const progressKinds = [...block.matchAll(/'([a-z-]+)'/g)].map((m) => m[1]);
+
+  check('the fold names what it hides', progressKinds.length > 0,
+    `found ${progressKinds.length} — the regex may have stopped matching`);
+
+  for (const k of TERMINAL_KINDS) {
+    check(`the fold does not hide "${k}"`, !progressKinds.includes(k),
+      'an ending the fold puts away is an answer nobody reads');
+  }
+}
+
 if (failures) {
   console.error(`\n${failures} check(s) failed.`);
   process.exit(1);

@@ -46,8 +46,14 @@ export const EVENT_KINDS: EventKind[] = [
 
 export const SOURCES: EventSource[] = ['model', 'pipeline', 'chain'];
 
-/** Kinds after which the flow has stopped and no further event will follow. */
-export const TERMINAL_KINDS = ['refused', 'filled', 'expired', 'revoked'];
+/**
+ * Kinds after which the flow has stopped and no further event will follow.
+ *
+ * `answered` belongs here — the flow stops at an answer and nothing follows. It was missing, so
+ * every capabilities answer was classified as progress: counted as a step and folded away. The
+ * user's questions survived and the answers to them did not.
+ */
+export const TERMINAL_KINDS = ['refused', 'filled', 'expired', 'revoked', 'answered'];
 
 /**
  * Build one event. Throws on an unknown kind or source rather than emitting something
@@ -84,6 +90,12 @@ const ENDING: Record<string, (d: EndingDetail) => string> = {
   // interface feel unreliable.
   revoked: () => 'revoked — your escrow is back in your wallet',
   refused: (d) => `refused — ${d.reason}`,
+  // An ANSWER is not an outcome — it IS the response, and the server sends its text directly.
+  // This exists so the vocabulary stays consistent: every terminal kind has wording, and the
+  // check that enforces it is worth more than an exception carved out for one kind. `answered`
+  // being missing from TERMINAL_KINDS is what caused the fold to hide every capabilities answer,
+  // so the invariant is load-bearing rather than decorative.
+  answered: () => 'answered',
 };
 
 /** The wording for a terminal kind, or null if the kind does not end a flow. */

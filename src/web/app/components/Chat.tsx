@@ -35,6 +35,25 @@ const SOURCE_TITLE: Record<Event['source'], string> = {
 };
 
 /**
+ * WHAT THE FOLD HIDES, named rather than derived.
+ *
+ * It used to hide "everything not said", and that default is what broke: `answered` was missing
+ * from TERMINAL_KINDS, so every capabilities answer was classified as progress — counted as a
+ * step and folded away. The user's questions survived and the answers to them did not.
+ *
+ * A fold whose default is HIDE fails silently every time a kind is added. This names what it folds
+ * and shows everything else, so an unclassified kind is VISIBLE — the safe direction, and the one
+ * a reader can check at a glance.
+ *
+ * Note this is a different question from "bubble or line": that one asks whether the event is
+ * addressed to you, this one asks whether the fold may put it away.
+ */
+const PROGRESS_KINDS = new Set([
+  'extracting', 'proposed', 'building', 'signing', 'submitting',
+  'notified', 'filling', 'reclaiming',
+]);
+
+/**
  * USDC has 6 decimals, SUI has 9.
  *
  * Every amount the server sends is in base units — `10000`, not `0.01` — because that is what
@@ -262,7 +281,7 @@ export function Chat({
   // the screen, and once the flow has ended the steps are the record rather than the point. While
   // it is RUNNING they stay visible, because then they ARE the point.
   const lastTerminal = events.reduce((at, e, i) => (e.terminal ? i : at), -1);
-  const steps = events.filter((e, i) => !isSaid(e) && i < lastTerminal).length;
+  const steps = events.filter((e, i) => PROGRESS_KINDS.has(e.kind) && i < lastTerminal).length;
   const hidden = !showSteps && steps > 0;
 
   return (
@@ -301,9 +320,9 @@ export function Chat({
               const isAsk = e.kind === 'ask';
               const said = isSaid(e);
 
-              // Hidden only when a LATER terminal event has closed the flow. Steps still running,
-              // and steps after the last outcome, are always shown.
-              if (hidden && !said && i < lastTerminal) return null;
+              // Hidden only when a LATER terminal event has closed the flow, and only if it is
+              // PROGRESS. Steps still running, and steps after the last outcome, are always shown.
+              if (hidden && PROGRESS_KINDS.has(e.kind) && i < lastTerminal) return null;
 
               if (!said) {
                 return (
