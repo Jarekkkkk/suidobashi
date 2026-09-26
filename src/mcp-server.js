@@ -61,6 +61,37 @@ async function getClient() {
   return client;
 }
 
+/**
+ * The fee an order pays for a fill, read from its DYNAMIC FIELD.
+ *
+ * Not from the order's own fields, because the fee is not one: `Order` is published and
+ * its layout is frozen, so `create_with_fee` stores the fee as a dynamic field. Reading
+ * `json.fee_out` finds nothing, and `?? 0` turns "not where I looked" into "no fee".
+ *
+ * That is exactly what happened — every order was reported as zero-fee while carrying
+ * 5000 on chain, and this server declined them all as below its minimum. The same shape
+ * of mistake as the page's fee field silently defaulting to zero: a fallback that
+ * cannot tell a real zero from a wrong lookup.
+ *
+ * Absent DOES mean zero here, and legitimately: `create_with_fee` stores nothing for a
+ * zero fee. But that is only true once the lookup is known to be right.
+ */
+async function readFee(orderId) {
+  const c = await getClient();
+  const fields = await c.listDynamicFields({ parentId: orderId, limit: 20 });
+  const f = (fields.dynamicFields ?? []).find((x) =>
+    String(x.name?.type ?? '').includes('::order::FeeKey'));
+  if (!f) return 0n;
+  const o = await c.getObject({ objectId: f.fieldId, include: { json: true } });
+  const raw = (o.object ?? o).json?.value;
+  // If the field exists but has no readable value, that is a lookup failure rather than
+  // a zero fee, and saying so beats reporting a number nobody can reproduce.
+  if (raw === undefined || raw === null) {
+    throw new Error(`FeeKey field on ${orderId} has no readable value`);
+  }
+  return BigInt(raw);
+}
+
 /** Read an order and decide whether this server will fill it. */
 async function inspect(orderId) {
   const c = await getClient();
@@ -77,7 +108,7 @@ async function inspect(orderId) {
   const sharedVersion = o.owner?.Shared?.initialSharedVersion;
   if (!sharedVersion) return { ok: false, why: 'order is not shared' };
 
-  const fee = BigInt(order.fee_out ?? 0);
+  const fee = await readFee(orderId);
   const expiresAtMs = Number(order.expires_at_ms ?? 0);
   const funds = BigInt(order.funds ?? 0);
   const minOut = BigInt(order.min_out ?? 0);
