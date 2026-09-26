@@ -634,6 +634,17 @@ it, then read the quantity back. That needs the guard module published, so it is
 publish. Until then `quantityScale` in `src/deepbook.ts` is marked UNVERIFIED and
 `src/verify-deepbook.js` prints the numbers instead of asserting them.
 
+**Dead storage has to go before an irreversible publish, not after.** `deepbook_guard` stored all
+three DeepBook capabilities and used one. The other two could never be read: `BalanceManager`'s
+`owner` is set only in the `new*` constructors and has **no setter anywhere** in the module, and
+`create` takes the BalanceManager **by value**, which in Sui only an owner can do — so the maker is
+permanently the account's owner, and DeepBook's owner paths (`deposit`, `withdraw`, `withdraw_all`)
+go through `generate_proof_as_owner` and take no capability at all. Two fields that nothing could
+ever read, in a struct a Sui upgrade cannot slim: `Published.toml`'s own comment on `spend_vault`
+("an upgrade cannot remove a module that is already part of a published package") is the same
+lesson one level down, at field granularity. The cost of finding it late is a guard that carries
+two dead fields forever.
+
 ## Mainnet feature flags (protocol 136, read from the node)
 
 ```text

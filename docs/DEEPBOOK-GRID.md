@@ -74,13 +74,27 @@ DeepBook v3 has a two-tier model already:
 |---|---|---|
 | `BalanceManager` (shared) | holds settled balances per asset | **the user** (owner) |
 | `TradeCap` | place/cancel orders, stake — *no* deposit/withdraw | the wrapper |
-| `DepositCap` | deposit only | the wrapper |
-| `WithdrawCap` | withdraw only | the wrapper |
+| `DepositCap` | deposit only | **nobody needs one** — see below |
+| `WithdrawCap` | withdraw only | **nobody needs one** — see below |
 | `TradeProof` | ephemeral, `has drop`, generated per call | nobody — made and consumed in-tx |
 
 `TradeCap`/`DepositCap`/`WithdrawCap` are all `has key, store`, and `BalanceManager has key, store`
-— so **our shared object can hold all four as fields.** That is what makes the containment real: the
-agent never holds a cap, so it cannot reach DeepBook except through our entry points.
+— so **our shared object can hold any of them as fields.** What makes the containment real is that
+the agent never holds a cap, so it cannot reach DeepBook except through our entry points.
+
+**The guard stores the trade capability and nothing else.** The other two turned out to be dead
+storage, and this was found before the publish rather than after — which matters, because removing a
+struct field is not something a Sui upgrade can do:
+
+- `owner` is set when a BalanceManager is created and **there is no setter for it anywhere** in
+  `deepbook::balance_manager` (checked: `owner` is assigned only in the `new*` constructors).
+- `create` takes the BalanceManager **by value**, and in Sui only an owner can use an owned object as
+  an input. So the maker is permanently the account's owner.
+- DeepBook's owner paths — `deposit<T>`, `withdraw<T>`, `withdraw_all<T>` — go through
+  `generate_proof_as_owner` and take **no capability at all**.
+
+So a deposit or withdraw capability in the guard would never be read by anything, while costing two
+fields in a struct that cannot be slimmed later.
 
 ```move
 generate_proof_as_trader(balance_manager, trade_cap, ctx): TradeProof   // cap-holder path ✓
@@ -106,9 +120,11 @@ prose:
 
 Constraints worth knowing. Withdrawals only touch **settled** balances — funds in resting orders
 cannot be withdrawn until canceled, so a stop must `cancel_all_orders` before any withdraw. The cap
-ceiling is 1,000 per BalanceManager, counted across all three types, so one account can back ~330
-guards at three caps each — nowhere near this design. `_v2` on `new_with_custom_owner_caps_v2` is
-mandatory; the unsuffixed name is a stub that aborts 1337.
+ceiling is 1,000 per BalanceManager, counted across all three types; the guard uses one, so one
+account can back 1,000 guards — nowhere near this design. `_v2` on
+`new_with_custom_owner_caps_v2` is mandatory; the unsuffixed name is a stub that aborts 1337. That
+constructor is not used here at all: it mints three capabilities, and `new` plus `mint_trade_cap`
+mints the one this design wants.
 
 **What isolation actually rests on**, checked against the source rather than assumed, because the
 code path is not what enforces it:
@@ -119,9 +135,12 @@ code path is not what enforces it:
 - So the **trade** cap *can* be checked at creation, by attempting the proof every order needs —
   Move cannot catch an abort, so the check IS the call. `create` now does this, and a mismatched
   pair is refused rather than producing a guard whose every order aborts inside DeepBook.
-- The **deposit and withdraw** caps cannot be checked the same way: `validate_deposit_cap` and
-  `validate_withdraw_cap` are package-private, so a mismatch there surfaces on first use. It fails
-  closed, and the maker's owner-withdraw exit is unaffected either way.
+- The **deposit and withdraw** capabilities are not checked at all, because the guard does not take
+them. DeepBook's `validate_deposit_cap` / `validate_withdraw_cap` are package-private, so a
+mismatched pair would only surface on first use — another reason not to have a field that exists
+solely to be wrong. The `a_foreign_deposit_cap_is_refused_by_deepbook_on_use` test still calls
+DeepBook directly, and now documents why this design wants no such capability rather than why it
+cannot check one.
 - A second guard over one account is possible. Only that account's owner can mint the caps for it,
   so it is a maker's choice about their own money rather than something a third party can arrange —
   which is why nothing here forbids it.
@@ -147,22 +166,21 @@ false` pays in the input token at a 25% premium — so a fill that crosses is wh
 `move/sources/deepbook_guard.move`, mirroring `position_guard.move`'s shape (shared object, stored
 agent address, maker-only setters, no function returning the wrapped object or a `&mut` to it).
 
-Maker only (`ctx.sender() == guard.maker`): `create<Base,Quote>` (takes the BM + three caps, shares)
-· `deposit<T>` · `withdraw<T>` (requires settled funds) · `stop` (paused + `cancel_all_orders`) ·
-`resume` · `set_agent` · `set_destination` · `set_bounds` · `redeem` (cancel everything, withdraw
-all, revoke the TradeCap — the wrapper goes inert, balances back with the user).
+Maker only (`ctx.sender() == guard.maker`): `create<Base,Quote>` (takes the BM + the trade
+capability, shares) · `set_agent` · `set_bounds` · `set_budget` · `set_paused`. Deposit and withdraw
+are DeepBook's owner paths, not ours — see §3.
 
 Agent only (`ctx.sender() == guard.agent`, not paused, inside bounds): `buy` · `sell` · `cancel` ·
 `cancel_all`.
 
 Built so far: `create`, the maker's knobs `set_agent`/`set_bounds`/`set_budget`/`set_paused`, and
-the agent paths `buy`/`sell`/`cancel`/`cancel_all`. The maker's capital paths — `deposit`,
-`withdraw`, `stop`, `redeem` — are the remaining steps. `stop` is `set_paused(true)` plus the
-`cancel_all_orders` that a paused agent can no longer do for it.
+the agent paths `buy`/`sell`/`cancel`/`cancel_all`. That is the whole surface the design needs, and
+the rest of this section records what the plan proposed and why it turned out to be unnecessary —
+worth doing before a publish rather than after, since a published struct cannot be slimmed.
 
 On the caller's side, `src/deepbook.ts` holds the pinned DeepBook constants, the grid arithmetic
 (`gridLevels`), the same four refusals the guard makes (`refusalFor`, each naming the Move assert it
-mirrors), and `buildCreateAccount` — the BalanceManager plus its three capabilities, which touches
+mirrors), and `buildCreateAccount` — the BalanceManager plus its trade capability, which touches
 only DeepBook's published package and therefore **simulates on mainnet today**
 (`src/verify-deepbook.js`, 21 checks, in the `bun run verify` chain).
 
@@ -172,6 +190,16 @@ together with the home-pane flow.
 
 Where the code diverges from this plan, and why:
 
+- **`deposit` and `withdraw` are not ours and are not needed.** The maker is permanently the
+  BalanceManager's owner (§3), so DeepBook's owner paths already cover capital in and out with no
+  capability. The plan listed them as guard functions; the finding is that they would have been
+  convenience at best.
+- **No `set_destination`.** An agent path never produces a coin — proceeds stay inside the
+  BalanceManager — so there is no value output for a destination to catch.
+- **`stop`/`redeem` are not built yet, and are convenience rather than capability.** The maker can
+  already freeze with `set_paused`, take the agent seat with `set_agent`, cancel with `cancel_all`,
+  withdraw as owner and revoke the capability. `stop` would be that in one transaction instead of
+  three, which is worth having and blocks nothing.
 - The pause primitive is `set_paused(bool)` rather than a `stop`/`resume` pair: stopping is a maker
   toggle, and cancelling the book is the part that needs the pool, so `stop` will be the pair.
 - `set_bounds` and `set_budget` are separate rather than one `set_limits`, because they change on

@@ -221,7 +221,7 @@ if (sim.$kind === 'Transaction') {
 const account = buildCreateAccount('0x0000000000000000000000000000000000000000000000000000000000000001');
 const accountSim = await client.simulateTransaction({ transaction: account.tx });
 check(
-  'creating a BalanceManager and its three capabilities simulates on mainnet',
+  'creating a BalanceManager and its trade capability simulates on mainnet',
   accountSim.$kind === 'Transaction',
   accountSim.$kind === 'Transaction' ? undefined : why(accountSim),
 );

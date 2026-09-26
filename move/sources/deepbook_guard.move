@@ -24,16 +24,14 @@
 /// move money are DeepBook's, and they answer to DeepBook's allowlist rather than to us.
 ///
 /// Two boundaries are worth knowing. A capability is one-to-one with a BalanceManager, but one
-/// account can hold up to 1,000 of them, so a single account can back roughly 330 guards at three
-/// capabilities each — and two guards over one account do share that account's funds. Only the
-/// account's owner can mint, so that state is a maker's own choice about their own money and
-/// never something a third party can arrange.
+/// account can hold up to 1,000 of them, so a single account can back that many guards — and two
+/// guards over one account do share that account's funds. Only the account's owner can mint, so
+/// that state is a maker's own choice about their own money and never something a third party can
+/// arrange.
 ///
 /// The trade capability is verified at creation, by attempting the proof every order would need:
 /// Move cannot catch an abort, so the check IS the call, and a mismatched pair is refused rather
-/// than left to produce a guard whose every order aborts. DeepBook's validators for the deposit
-/// and withdraw capabilities are package-private, so those two cannot be checked the same way and
-/// are refused on first use instead.
+/// than left to produce a guard whose every order aborts.
 ///
 /// What the limits do and do not do. Every order must sit inside the band and under the per-order
 /// quantity bound, and a paused guard places none at all. The budget caps the total: it counts
@@ -54,9 +52,9 @@
 /// the account's allowlist and never re-lists it, and this guard has no way to accept a
 /// replacement capability. `set_paused` is the reversible stop; revocation is the one-way one.
 ///
-/// Creation is permissionless: any wallet holding a BalanceManager and its three caps can create
-/// a guard for any pool. No whitelist, no deploy per user. Holding the caps **is** the permission
-/// — they are owned objects, and only their owner can hand them over.
+/// Creation is permissionless: any wallet holding a BalanceManager and a trade capability can
+/// create a guard for any pool. No whitelist, no deploy per user. Holding them **is** the
+/// permission — both are owned objects, and only their owner can hand them over.
 ///
 /// The BalanceManager is shared rather than stored inside the guard, deliberately. That keeps two
 /// exits open which do not run through this code, both of them DeepBook's own: withdrawing as the
@@ -64,7 +62,7 @@
 /// only the cap's id. A bug in this module cannot trap capital.
 module sui_tokyo::deepbook_guard;
 
-use deepbook::balance_manager::{Self, BalanceManager, DepositCap, TradeCap, WithdrawCap};
+use deepbook::balance_manager::{Self, BalanceManager, TradeCap};
 use deepbook::constants;
 use deepbook::order_info::OrderInfo;
 use deepbook::pool::{Self, Pool};
@@ -116,9 +114,13 @@ public struct DeepbookGuard<phantom Base, phantom Quote> has key {
     budget: u64,
     /// How much of that budget is gone. Monotone: nothing refunds it, not even a cancel.
     committed: u64,
-    /// DeepBook capabilities, held here so that the agent needs none of its own.
-    deposit_cap: DepositCap,
-    withdraw_cap: WithdrawCap,
+    /// The one DeepBook capability the guard needs, and the reason the agent needs none of its own.
+    ///
+    /// Only the trade capability is here. A deposit or withdraw capability would be dead storage:
+    /// `create` takes the BalanceManager BY VALUE, which in Sui only its owner can do, so the maker
+    /// is permanently the account's owner — and DeepBook's owner paths for deposits and withdrawals
+    /// take no capability at all (`generate_proof_as_owner`). Removing a struct field after publish
+    /// is not something an upgrade can do, so dead fields have to go before then, not after.
     trade_cap: TradeCap,
 }
 
@@ -158,8 +160,6 @@ public struct GuardUpdated has copy, drop {
 public fun create<Base, Quote>(
     pool_id: ID,
     mut balance_manager: BalanceManager,
-    deposit_cap: DepositCap,
-    withdraw_cap: WithdrawCap,
     trade_cap: TradeCap,
     agent: address,
     price_min: u64,
@@ -172,8 +172,7 @@ public fun create<Base, Quote>(
 
     let balance_manager_id = object::id(&balance_manager);
 
-    // Refuse a pairing that would leave the guard unable to do the one thing it exists for. The
-    // deposit and withdraw capabilities cannot be checked here; see the module note.
+    // Refuse a pairing that would leave the guard unable to do the one thing it exists for.
     assert_trade_cap_belongs(&mut balance_manager, &trade_cap, ctx);
     // `public_share_object`, not `share_object`: the BalanceManager is DeepBook's type, and the
     // private form is restricted to its own module. It has `store`, so this is the permitted
@@ -193,8 +192,6 @@ public fun create<Base, Quote>(
         max_qty,
         budget,
         committed: 0,
-        deposit_cap,
-        withdraw_cap,
         trade_cap,
     };
     let guard_id = object::id(&guard);
@@ -525,19 +522,11 @@ public fun committed<Base, Quote>(guard: &DeepbookGuard<Base, Quote>): u64 {
     guard.committed
 }
 
-/// The ids of the capabilities this guard holds.
+/// The id of the capability this guard holds.
 ///
 /// Exposed so a maker can name the guard's `TradeCap` to DeepBook's `revoke_trade_cap`, which is
 /// the kill switch that does not depend on this module. A stored object's id is otherwise
 /// unknowable from outside, and a kill switch you cannot address is not a kill switch.
-public fun deposit_cap_id<Base, Quote>(guard: &DeepbookGuard<Base, Quote>): ID {
-    object::id(&guard.deposit_cap)
-}
-
-public fun withdraw_cap_id<Base, Quote>(guard: &DeepbookGuard<Base, Quote>): ID {
-    object::id(&guard.withdraw_cap)
-}
-
 public fun trade_cap_id<Base, Quote>(guard: &DeepbookGuard<Base, Quote>): ID {
     object::id(&guard.trade_cap)
 }

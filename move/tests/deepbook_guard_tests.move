@@ -78,16 +78,12 @@ fun setup_with_budget(
     budget: u64,
 ): (ID, ID) {
     let mut bm = balance_manager::new(s.ctx());
-    let deposit_cap = balance_manager::mint_deposit_cap(&mut bm, s.ctx());
-    let withdraw_cap = balance_manager::mint_withdraw_cap(&mut bm, s.ctx());
     let trade_cap = balance_manager::mint_trade_cap(&mut bm, s.ctx());
     let balance_manager_id = object::id(&bm);
 
     let guard_id = deepbook_guard::create<TestBase, TestQuote>(
         pool(),
         bm,
-        deposit_cap,
-        withdraw_cap,
         trade_cap,
         agent,
         price_min,
@@ -149,20 +145,14 @@ fun the_guard_records_what_it_was_handed() {
     let mut s = ts::begin(ALICE);
 
     let mut bm = balance_manager::new(s.ctx());
-    let deposit_cap = balance_manager::mint_deposit_cap(&mut bm, s.ctx());
-    let withdraw_cap = balance_manager::mint_withdraw_cap(&mut bm, s.ctx());
     let trade_cap = balance_manager::mint_trade_cap(&mut bm, s.ctx());
 
     let balance_manager_id = object::id(&bm);
-    let deposit_cap_id = object::id(&deposit_cap);
-    let withdraw_cap_id = object::id(&withdraw_cap);
     let trade_cap_id = object::id(&trade_cap);
 
     let guard_id = deepbook_guard::create<TestBase, TestQuote>(
         pool(),
         bm,
-        deposit_cap,
-        withdraw_cap,
         trade_cap,
         OPERATOR,
         PRICE_MIN,
@@ -177,17 +167,14 @@ fun the_guard_records_what_it_was_handed() {
         let g = take(&mut s, guard_id);
         assert_eq!(deepbook_guard::pool_id(&g), pool());
         assert_eq!(deepbook_guard::balance_manager_id(&g), balance_manager_id);
-        assert_eq!(deepbook_guard::deposit_cap_id(&g), deposit_cap_id);
-        assert_eq!(deepbook_guard::withdraw_cap_id(&g), withdraw_cap_id);
         assert_eq!(deepbook_guard::trade_cap_id(&g), trade_cap_id);
         assert_eq!(deepbook_guard::is_paused(&g), false);
 
-        // Three capabilities, each its own object — the reason the 1,000-per-account ceiling is
-        // nowhere near this design.
-        assert!(deposit_cap_id != withdraw_cap_id);
-        assert!(withdraw_cap_id != trade_cap_id);
-        assert!(deposit_cap_id != trade_cap_id);
-
+        // One capability, not three. A deposit or withdraw capability in here would be dead
+        // storage: the maker is permanently the BalanceManager's owner — `create` takes it by
+        // value, and only an owner can — and DeepBook's owner paths for deposits and withdrawals
+        // take no capability at all. So the guard stores the one it uses, and the test that the
+        // maker can still deposit and withdraw without the guard covers the rest.
         let (price_min, price_max, max_qty) = deepbook_guard::bounds(&g);
         assert_eq!(price_min, PRICE_MIN);
         assert_eq!(price_max, PRICE_MAX);
@@ -674,8 +661,6 @@ fun create_refuses_a_trade_cap_from_another_account() {
     let mut s = ts::begin(ALICE);
 
     let mut first = balance_manager::new(s.ctx());
-    let deposit_cap = balance_manager::mint_deposit_cap(&mut first, s.ctx());
-    let withdraw_cap = balance_manager::mint_withdraw_cap(&mut first, s.ctx());
 
     let mut second = balance_manager::new(s.ctx());
     let foreign_trade_cap = balance_manager::mint_trade_cap(&mut second, s.ctx());
@@ -684,8 +669,6 @@ fun create_refuses_a_trade_cap_from_another_account() {
     let _ = deepbook_guard::create<TestBase, TestQuote>(
         pool(),
         first,
-        deposit_cap,
-        withdraw_cap,
         foreign_trade_cap,
         OPERATOR,
         PRICE_MIN,
@@ -740,10 +723,12 @@ fun a_stranger_cannot_mint_a_capability_for_another_account() {
     s.end();
 }
 
-/// The two capabilities `create` cannot check are still checked — by DeepBook, on first use. Its
-/// validators for these take the same allowlist route as the trade capability; they are simply not
-/// reachable from outside the package, so the refusal lands at the deposit rather than at creation.
-/// A later gate, not a hole.
+/// Why this design wants no deposit capability, demonstrated rather than asserted: DeepBook does
+/// gate one, and refusing a capability that belongs to another account is the gate working. But the
+/// guard holds no deposit capability and needs none, because the maker is always the account's owner
+/// and DeepBook's owner path for a deposit takes no capability at all. So the correct number of dead
+/// capabilities to carry is zero, and the gate below is what would have caught a mismatch if it had
+/// been carrying one anyway.
 #[test]
 #[expected_failure(abort_code = 1)]
 fun a_foreign_deposit_cap_is_refused_by_deepbook_on_use() {
@@ -947,8 +932,6 @@ fun the_maker_can_kill_the_agent_without_touching_this_module() {
     let mut s = ts::begin(ALICE);
 
     let mut bm = balance_manager::new(s.ctx());
-    let deposit_cap = balance_manager::mint_deposit_cap(&mut bm, s.ctx());
-    let withdraw_cap = balance_manager::mint_withdraw_cap(&mut bm, s.ctx());
     let trade_cap = balance_manager::mint_trade_cap(&mut bm, s.ctx());
     let trade_cap_id = object::id(&trade_cap);
     let balance_manager_id = object::id(&bm);
@@ -956,8 +939,6 @@ fun the_maker_can_kill_the_agent_without_touching_this_module() {
     let guard_id = deepbook_guard::create<TestBase, TestQuote>(
         pool(),
         bm,
-        deposit_cap,
-        withdraw_cap,
         trade_cap,
         OPERATOR,
         PRICE_MIN,
@@ -999,8 +980,6 @@ fun the_harshest_kill_still_leaves_the_maker_an_exit() {
         coin::mint_for_testing<TestCoin>(1_000, s.ctx()),
         s.ctx(),
     );
-    let deposit_cap = balance_manager::mint_deposit_cap(&mut bm, s.ctx());
-    let withdraw_cap = balance_manager::mint_withdraw_cap(&mut bm, s.ctx());
     let trade_cap = balance_manager::mint_trade_cap(&mut bm, s.ctx());
     let trade_cap_id = object::id(&trade_cap);
     let balance_manager_id = object::id(&bm);
@@ -1008,8 +987,6 @@ fun the_harshest_kill_still_leaves_the_maker_an_exit() {
     let _guard_id = deepbook_guard::create<TestBase, TestQuote>(
         pool(),
         bm,
-        deposit_cap,
-        withdraw_cap,
         trade_cap,
         OPERATOR,
         PRICE_MIN,

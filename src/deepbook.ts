@@ -194,35 +194,25 @@ function ceilTo(value: bigint, step: bigint): bigint {
  * which is the moment it becomes referenceable by the agent's transaction.
  *
  * `new` is used rather than `new_with_custom_owner_caps_v2`: the latter also needs the DeepBook
- * registry object and an `App` witness type, and it mints the same three capabilities. Owner is
- * whoever `owner` names either way.
+ * registry object and an `App` witness type, for capabilities this does not want.
  */
 export function buildCreateAccount(owner: string): {
   tx: Transaction;
   balanceManager: () => ReturnType<Transaction['moveCall']>;
-  depositCap: () => ReturnType<Transaction['moveCall']>;
-  withdrawCap: () => ReturnType<Transaction['moveCall']>;
   tradeCap: () => ReturnType<Transaction['moveCall']>;
 } {
   const tx = new Transaction();
   const target = (fn: string) => `${DEEPBOOK_PACKAGE}::balance_manager::${fn}`;
 
   const balanceManager = tx.moveCall({ target: target('new'), arguments: [] });
-  const depositCap = tx.moveCall({ target: target('mint_deposit_cap'), arguments: [balanceManager] });
-  const withdrawCap = tx.moveCall({
-    target: target('mint_withdraw_cap'),
-    arguments: [balanceManager],
-  });
   const tradeCap = tx.moveCall({ target: target('mint_trade_cap'), arguments: [balanceManager] });
 
   tx.transferObjects([balanceManager], owner);
-  tx.transferObjects([depositCap, withdrawCap, tradeCap], owner);
+  tx.transferObjects([tradeCap], owner);
 
   return {
     tx,
     balanceManager: () => balanceManager,
-    depositCap: () => depositCap,
-    withdrawCap: () => withdrawCap,
     tradeCap: () => tradeCap,
   };
 }
