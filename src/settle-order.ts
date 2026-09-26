@@ -88,7 +88,7 @@ async function main() {
   const sqrtPriceLimit = (currentSqrtPrice * (10_000n + SLIPPAGE_BPS)) / 10_000n;
 
   const tx = new Transaction();
-  tx.setSender(agent);
+  tx.setSender(String(agent));
 
   const policy = tx.sharedObjectRef({
     objectId: POLICY_ID, initialSharedVersion: POLICY_SHARED_VERSION, mutable: false,
@@ -130,7 +130,7 @@ async function main() {
   if (NO_SIMULATE) {
     const chainId = (await client.getChainIdentifier()).chainIdentifier;
     const sysState = await client.getCurrentSystemState();
-    const epochNow = Number(sysState.systemState?.epoch ?? sysState.epoch);
+    const epochNow = Number((sysState as any).systemState?.epoch ?? (sysState as any).epoch);
     tx.setGasBudget(50_000_000n);
     tx.setGasPrice(1000n);
     tx.setGasPayment([]);
@@ -147,8 +147,8 @@ async function main() {
   }
 
   if (!EXECUTE) {
-    const res = await client.simulateTransaction({ transaction: bytes });    const status = res?.Transaction?.status ?? res?.status ?? null;
-    const ok = status?.success === true || status?.status === 'success';
+    const res = await client.simulateTransaction({ transaction: bytes });    const status = res?.Transaction?.status ?? null;
+    const ok = status?.success === true;
     console.log(JSON.stringify({
       mode: 'dry-run',
       step: `fill order (settle_${SIDE}2${SIDE === 'b' ? 'a' : 'b'})`,
@@ -178,11 +178,15 @@ async function main() {
   const { secretKey } = decodeSuiPrivateKey(secret);
   const signer = Ed25519Keypair.fromSecretKey(secretKey);
 
+  if (!signer) throw new Error('no signer — this path requires --execute');
+
   const sent = await client.signAndExecuteTransaction({ transaction: bytes, signer });
   // A FAILED transaction comes back wrapped in `FailedTransaction`, not `Transaction`.
   // Reading only the success shape reported `digest: null` for precisely the failures
   // this mode exists to produce — the digest was there, under a different key.
-  const result = sent?.Transaction ?? sent?.FailedTransaction ?? sent ?? {};
+  // `any` because the fallback chain can land on the WRAPPER, which carries no digest —
+    // the wrapper shape is { $kind, Transaction } and the payload is one level down.
+    const result: any = sent?.Transaction ?? sent?.FailedTransaction ?? {};
   const digest = result.digest ?? null;
   const status = result.status ?? null;
   console.log(JSON.stringify({

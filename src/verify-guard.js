@@ -95,7 +95,7 @@ check('a null document is an error, not a throw', Boolean(findCreatedGuard(null)
 
 // === rewriting the config ===
 
-const realSource = fs.readFileSync('src/addresses.js', 'utf8');
+const realSource = fs.readFileSync('src/addresses.ts', 'utf8');
 const NEW_ID = `0x${'ab'.repeat(32)}`;
 
 const rewritten = repointAddresses(realSource, NEW_ID, 4242);

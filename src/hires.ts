@@ -48,15 +48,25 @@ export const DEFAULT_HIRE = 'standard';
 /** Names the model may emit. Kept as an array so the schema and the prompt agree. */
 export const HIRE_NAMES = Object.keys(HIRES);
 
-  /**
+/**
+   * One hire, and the name that keys it.
+   *
+   * Exported so callers can say what they hold rather than reaching for `any` or indexing with a
+   * bare string. Four files were indexing HIRES with an arbitrary string, which TypeScript refuses
+   * — correctly, since a typo would return undefined and fail somewhere less legible.
+   */
+export type Hire = (typeof HIRES)[keyof typeof HIRES];
+export type HireName = keyof typeof HIRES;
+
+/**
    * The hire a name refers to, or null if it names nothing.
    *
    * @param {unknown} name as the model or a form field supplied it — normalised here rather
    *   than at every call site, since it arrives from both
    * @returns {typeof HIRES[keyof typeof HIRES] | null}
    */
-  export function getHire(name) {
+  export function getHire(name: unknown): Hire | null {
   const key = String(name ?? '').trim().toLowerCase();
   if (!key) return HIRES[DEFAULT_HIRE];
-  return HIRES[key] ?? null;
+  return HIRES[key as HireName] ?? null;
 }

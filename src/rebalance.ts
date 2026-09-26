@@ -55,7 +55,7 @@ async function main() {
   });
 
   const poolObj = await client.getObject({ objectId: POOL_ID, include: { json: true } });
-  const poolJson = (poolObj.object ?? poolObj).json ?? {};
+  const poolJson: any = (poolObj.object ?? poolObj).json ?? {};
   const currentTick = Number(poolJson.current_tick_index?.bits ?? poolJson.current_tick_index ?? 0);
 
   const tx = new Transaction();
@@ -100,8 +100,8 @@ async function main() {
   }
 
   const res = await client.simulateTransaction({ transaction: bytes });
-  const status = res?.Transaction?.status ?? res?.status ?? null;
-  const ok = status?.success === true || status?.status === 'success';
+  const status = res?.Transaction?.status ?? null;
+  const ok = status?.success === true;
 
   console.log(JSON.stringify({
     mode: 'dry-run',

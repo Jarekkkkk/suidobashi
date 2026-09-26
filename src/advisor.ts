@@ -36,12 +36,14 @@ const MAX_DEVIATION = 0.02; // 2% off reference market — refuse beyond this
  * and `normalizeCoinType` does not bridge that — so a naive equality test
  * silently never matches and every route looks multi-hop.
  */
-const shortType = (t) => String(t).split('::').slice(-2).join('::');
+const shortType = (t: unknown) => String(t).split('::').slice(-2).join('::');
 
 async function main() {
   const { AggregatorClient, getProvidersIncluding, CETUS } =
     await import('@cetusprotocol/aggregator-sdk');
-  const BN = (await import('bn.js')).default;
+  // bn.js ships no types. The aggregator's SDK takes its values, so this is the one
+  // place the shape is genuinely unknown and a cast is the honest answer.
+  const BN = ((await import('bn.js')) as any).default;
 
   const client = new AggregatorClient({});
 

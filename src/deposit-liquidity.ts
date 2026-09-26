@@ -56,7 +56,7 @@ async function main() {
   // `balance::split` code 2 — which reads like a broken transaction rather than "you do
   // not have that much", and is the shape of failure a person is most likely to hit,
   // since deploying capital is exactly what spends it.
-  const held = async (coinType) => {
+  const held = async (coinType: string) => {
     const b = await client.getBalance({ owner: sender, coinType });
     return BigInt(b.balance?.balance ?? 0);
   };
@@ -132,8 +132,8 @@ async function main() {
   }
 
   const res = await client.simulateTransaction({ transaction: bytes });
-  const status = res?.Transaction?.status ?? res?.status ?? null;
-  const ok = status?.success === true || status?.status === 'success';
+  const status = res?.Transaction?.status ?? null;
+  const ok = status?.success === true;
 
   console.log(JSON.stringify({
     mode: 'dry-run',

@@ -4,15 +4,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "agent": "bun src/agent.js",
-    "budget": "node src/set-budget.js",
+    "agent": "bun src/agent.ts",
+    "budget": "bun src/set-budget.ts",
     "build:app": "bun build src/web/app/main.tsx --outfile /tmp/app.js --format=esm --target=browser && bunx @tailwindcss/cli -i src/web/app/app.css -o /tmp/app.css",
-    "hires": "node src/hire-agent.js",
+    "hires": "bun src/hire-agent.ts",
     "qvac": "qvac serve openai",
     "test": "cd move && sui move test",
     "typecheck": "bunx tsc --noEmit",
     "ui": "bun src/ui.ts",
-    "verify": "bunx tsc --noEmit && bunx tsc -p tsconfig.checked.json && bun src/verify-intent.js && bun src/verify-page.js && bun src/verify-guard.js && bun src/verify-order.js"
+    "verify": "bunx tsc --noEmit && bunx tsc -p tsconfig.server.json && bun src/verify-intent.js && bun src/verify-page.js && bun src/verify-guard.js && bun src/verify-order.js"
   },
   "dependencies": {
     "@cetusprotocol/aggregator-sdk": "^1.7.3",
@@ -30,6 +30,7 @@
   },
   "devDependencies": {
     "@tailwindcss/cli": "^4.3.3",
+    "@types/bn.js": "^5.2.0",
     "@types/node": "^26.6.3",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",

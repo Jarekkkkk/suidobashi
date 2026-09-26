@@ -24,7 +24,7 @@ const OBJECT_ID = /^0x[0-9a-f]{64}$/;
  * @param {any} doc the parsed `sui client tx-block --json` output
  * @returns {{id: string, version: number} | {error: string}}
  */
-export function findCreatedGuard(doc) {
+export function findCreatedGuard(doc: any): { id: string; version: number } | { error: string } {
   const changes = doc?.objectChanges;
   if (!Array.isArray(changes)) return { error: 'no objectChanges in the transaction' };
 
@@ -59,15 +59,18 @@ export function findCreatedGuard(doc) {
  * @param {unknown} version its initial shared version
  * @returns {string | null}
  */
-export function repointAddresses(source, id, version) {
+export function repointAddresses(source: unknown, id: unknown, version: unknown): string | null {
   if (typeof source !== 'string') return null;
   if (!OBJECT_ID.test(String(id)) || !Number.isInteger(version)) return null;
 
-  const withId = source.replace(/(export const GUARD_ID\s*=\s*')[0-9a-fx]+(')/, `$1${id}$2`);
+  // `id` is checked as a valid object id above, so binding it here is what lets the rest of the
+  // function treat it as a string. `source` is already narrowed by its own typeof check.
+  const idText = String(id);
+  const withId = source.replace(/(export const GUARD_ID\s*=\s*')[0-9a-fx]+(')/, `$1${idText}$2`);
   const withBoth = withId.replace(/(export const GUARD_SHARED_VERSION\s*=\s*)\d+/, `$1${version}`);
 
   // Both must have actually changed, and the id must not already have been present.
   if (withId === source || withBoth === withId) return null;
-  if (source.includes(id)) return null;
+  if (source.includes(idText)) return null;
   return withBoth;
 }

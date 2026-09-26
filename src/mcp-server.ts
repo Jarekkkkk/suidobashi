@@ -52,7 +52,9 @@ const HOST = process.env.MCP_HOST ?? '127.0.0.1';
  */
 const MIN_FEE_OUT = BigInt(process.env.MCP_MIN_FEE_OUT ?? '10000');
 
-let client;
+// Typed explicitly: inferred from a dynamic import inside a function, it is `any` in some
+// locations and unresolvable in others — which is exactly what the compiler said.
+let client: any;
 
 async function getClient() {
   if (!client) {
@@ -77,10 +79,10 @@ async function getClient() {
  * Absent DOES mean zero here, and legitimately: `create_with_fee` stores nothing for a
  * zero fee. But that is only true once the lookup is known to be right.
  */
-async function readFee(orderId) {
+async function readFee(orderId: string) {
   const c = await getClient();
   const fields = await c.listDynamicFields({ parentId: orderId, limit: 20 });
-  const f = (fields.dynamicFields ?? []).find((x) =>
+  const f = (fields.dynamicFields ?? []).find((x: any) =>
     String(x.name?.type ?? '').includes('::order::FeeKey'));
   if (!f) return 0n;
   const o = await c.getObject({ objectId: f.fieldId, include: { json: true } });
@@ -94,13 +96,13 @@ async function readFee(orderId) {
 }
 
 /** Read an order and decide whether this server will fill it. */
-async function inspect(orderId) {
+async function inspect(orderId: string) {
   const c = await getClient();
   let obj;
   try {
     obj = await c.getObject({ objectId: orderId, include: { json: true } });
   } catch (e) {
-    return { ok: false, why: `cannot read ${orderId}: ${e.message}` };
+    return { ok: false, why: `cannot read ${orderId}: ${(e as any).message}` };
   }
   const o = obj.object ?? obj;
   const order = o.json ?? {};
@@ -150,7 +152,7 @@ async function inspect(orderId) {
  * A timeout is NOT a failure. The settlement has landed either way, and the retry on the
  * burn's build covers a reader still behind.
  */
-async function waitUntilSettled(client, orderId, tries = 12) {
+async function waitUntilSettled(client: any, orderId: string, tries = 12) {
   for (let i = 0; i < tries; i++) {
     try {
       const o = await client.getObject({ objectId: orderId, include: { json: true } });
@@ -165,7 +167,7 @@ async function waitUntilSettled(client, orderId, tries = 12) {
   return false;
 }
 
-async function fill(orderId) {
+async function fill(orderId: string) {
   const seen = await inspect(orderId);
   if (!seen.ok) return { filled: false, ...seen };
 
@@ -212,7 +214,9 @@ async function fill(orderId) {
   const signer = Ed25519Keypair.fromSecretKey(secretKey);
   const sent = await c.signAndExecuteTransaction({ transaction: bytes, signer });
   // A failed transaction comes back under FailedTransaction, not Transaction.
-  const result = sent?.Transaction ?? sent?.FailedTransaction ?? sent ?? {};
+  // `any` because the fallback chain can land on the WRAPPER, which carries no digest —
+    // the wrapper shape is { $kind, Transaction } and the payload is one level down.
+    const result: any = sent?.Transaction ?? sent?.FailedTransaction ?? {};
 
   // Confirm the settlement is READABLE before reporting it, so a caller acting on it
   // immediately is not racing a node's view.
@@ -222,12 +226,12 @@ async function fill(orderId) {
     filled: result.status?.success === true,
     digest: result.digest ?? null,
     status: result.status ?? null,
-    fee: seen.fee.toString(),
-    minOut: seen.minOut.toString(),
+    fee: String(seen.fee ?? 0n),
+    minOut: String(seen.minOut ?? 0n),
   };
 }
 
-const json = (res, code, body) => {
+const json = (res: any, code: number, body: unknown) => {
   res.writeHead(code, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(body));
 };
@@ -272,7 +276,7 @@ const server = http.createServer((req, res) => {
         const out = await fill(orderId);
         return json(res, out.filled ? 200 : 409, out);
       } catch (e) {
-        return json(res, 500, { filled: false, why: String(e?.message || e) });
+        return json(res, 500, { filled: false, why: String((e as any)?.message ?? e) });
       }
     });
     return;

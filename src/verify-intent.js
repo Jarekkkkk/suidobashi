@@ -5,7 +5,7 @@
  * to be wrong, so what is asserted is never the model's output — only what the
  * gate decided and why.
  *
- * Every case is a mainnet simulation inside agent.js; nothing is signed and
+ * Every case is a mainnet simulation inside agent.ts; nothing is signed and
  * nothing is submitted, so this costs nothing to run.
  *
  * HERMETIC: the wallet balance is injected rather than read, so the outcome does not
@@ -74,7 +74,7 @@ const CASES = [
 ];
 
 function run(text) {
-  const r = spawnSync('node', ['src/agent.js', text], {
+  const r = spawnSync('bun', ['src/agent.ts', text], {
     encoding: 'utf-8',
     timeout: 300_000,
     env: { ...process.env, AGENT_WALLET_BALANCE_MIST: INJECTED_WALLET_MIST },
@@ -85,7 +85,7 @@ function run(text) {
       return JSON.parse(out.slice(start, end));
     } catch { /* keep shrinking */ }
   }
-  throw new Error(`no JSON from agent.js for "${text}": ${(r.stderr || out).slice(0, 200)}`);
+  throw new Error(`no JSON from agent.ts for "${text}": ${(r.stderr || out).slice(0, 200)}`);
 }
 
 let failed = 0;
@@ -139,7 +139,7 @@ for (const c of CASES) {
 // balance varies, and the point here is that the path runs at all.
 let realVerdict = null;
 try {
-  const r = spawnSync('node', ['src/agent.js', 'swap 0.005 SUI to USDC'], {
+  const r = spawnSync('bun', ['src/agent.ts', 'swap 0.005 SUI to USDC'], {
     encoding: 'utf-8',
     timeout: 300_000,
     // The override is DELETED, not set to undefined: spawnSync stringifies env values,

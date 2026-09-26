@@ -22,7 +22,7 @@ import {
   PACKAGE_LATEST_ID, VAULT_ID, OWNER_CAP_ID, CLOCK_ID, SUI_TYPE,
   VAULT_SHARED_VERSION, CLOCK_SHARED_VERSION, DEPLOYER,
 } from './addresses.js';
-import { HIRES, DEFAULT_HIRE, HIRE_NAMES } from './hires.js';
+import { HIRES, DEFAULT_HIRE, HIRE_NAMES, type HireName } from './hires.js';
 // For MESSAGES only. The transaction still carries the integer.
 import { mistToSui } from './web/units.js';
 
@@ -31,7 +31,7 @@ const BUDGET_MIST = BigInt(process.env.BUDGET_MIST ?? '50000000');
 const EXPIRY_MS = 4_102_444_800_000n; // 2100-01-01
 
 const HIRE_NAME = (process.env.HIRE ?? DEFAULT_HIRE).trim().toLowerCase();
-const hire = HIRES[HIRE_NAME];
+const hire = HIRES[HIRE_NAME as HireName];
 if (!hire) {
   throw new Error(`unknown HIRE "${HIRE_NAME}" — known: ${HIRE_NAMES.join(', ')}`);
 }
@@ -86,8 +86,8 @@ async function main() {
   }
 
   const res = await client.simulateTransaction({ transaction: bytes });
-  const status = res?.Transaction?.status ?? res?.status ?? null;
-  const ok = status?.success === true || status?.status === 'success';
+  const status = res?.Transaction?.status ?? null;
+  const ok = status?.success === true;
   console.log(JSON.stringify({
     mode: 'dry-run',
     step: 'set hire budget',

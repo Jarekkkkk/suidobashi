@@ -85,8 +85,8 @@ async function main() {
     return;
   }
   const res = await client.simulateTransaction({ transaction: bytes });
-  const status = res?.Transaction?.status ?? res?.status ?? null;
-  const ok = status?.success === true || status?.status === 'success';
+  const status = res?.Transaction?.status ?? null;
+  const ok = status?.success === true;
 
   console.log(JSON.stringify({
     mode: 'dry-run',

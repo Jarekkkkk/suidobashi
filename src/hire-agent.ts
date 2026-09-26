@@ -36,7 +36,7 @@ import {
   PACKAGE_LATEST_ID, VAULT_ID, OWNER_CAP_ID, POOL_ID, CLOCK_ID, SUI_TYPE,
   VAULT_SHARED_VERSION, CLOCK_SHARED_VERSION, DEPLOYER,
 } from './addresses.js';
-import { HIRES } from './hires.js';
+import { HIRES, type HireName } from './hires.js';
 
 const MINT = process.argv.includes('--mint');
 const GRANT = process.argv.includes('--grant');
@@ -121,7 +121,7 @@ async function main() {
     // which is why this cannot be folded into phase B — `create` shares the
     // policy, so it is not an input this transaction could pass.
     const hireName = process.env.HIRE;
-    const hire = hireName ? HIRES[hireName] : null;
+    const hire = hireName ? HIRES[hireName as HireName] : null;
     if (!hire) throw new Error(`HIRE must be one of: ${Object.keys(HIRES).join(', ')}`);
     const venue = process.env.VENUE || POOL_ID;
 
@@ -142,7 +142,7 @@ async function main() {
     phase = 'repoint';
     if (!AGENT) throw new Error('AGENT is required for --repoint');
     const hireName = process.env.HIRE;
-    const hire = hireName ? HIRES[hireName] : null;
+    const hire = hireName ? HIRES[hireName as HireName] : null;
     if (!hire) throw new Error(`HIRE must be one of: ${Object.keys(HIRES).join(', ')}`);
     const boundBps = BigInt(process.env.BOUND_BPS ?? '0');
 
@@ -176,8 +176,8 @@ async function main() {
   }
 
   const res = await client.simulateTransaction({ transaction: bytes });
-  const status = res?.Transaction?.status ?? res?.status ?? null;
-  const ok = status?.success === true || status?.status === 'success';
+  const status = res?.Transaction?.status ?? null;
+  const ok = status?.success === true;
   console.log(JSON.stringify({
     mode: 'dry-run',
     phase,

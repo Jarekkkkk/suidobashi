@@ -446,7 +446,7 @@ function actionFor(kind: string, body: ActionBody): {
   if (kind === 'suspend') {
     if (!body.hire || !(body.hire in HIRES)) return { error: 'unknown hire' };
     return {
-      script: 'src/set-suspended.js',
+      script: 'src/set-suspended.ts',
       env: { HIRE: body.hire, SUSPEND: body.suspended ? 'true' : 'false' },
       proposal: { action: body.suspended ? 'suspend' : 'resume', hire: body.hire },
     };
@@ -455,7 +455,7 @@ function actionFor(kind: string, body: ActionBody): {
     const mist = toMist(body.amountMist);
     if (mist === null || mist <= 0n) return { error: 'amountMist must be a positive integer' };
     return {
-      script: 'src/topup-vault.js',
+      script: 'src/topup-vault.ts',
       // SKIP_BUDGET: funding and granting are separate operations here, so the
       // vault figure changes without silently moving anyone's ceiling.
       env: { TOPUP_MIST: String(mist), SKIP_BUDGET: '1' },
@@ -467,7 +467,7 @@ function actionFor(kind: string, body: ActionBody): {
     const mist = toMist(body.amountMist);
     if (mist === null) return { error: 'amountMist must be a non-negative integer' };
     return {
-      script: 'src/set-budget.js',
+      script: 'src/set-budget.ts',
       env: { HIRE: body.hire, BUDGET_MIST: String(mist) },
       proposal: {
         action: 'set budget',
@@ -481,7 +481,7 @@ function actionFor(kind: string, body: ActionBody): {
     const venue = body.venue || HIRES[body.hire as keyof typeof HIRES].venue.id;
     const allow = body.allow !== false;
     return {
-      script: 'src/hire-agent.js --allowlist',
+      script: 'src/hire-agent.ts --allowlist',
       env: { HIRE: body.hire, VENUE: venue, ALLOW: allow ? 'true' : 'false' },
       proposal: {
         action: allow ? 'allow swap pool' : 'block swap pool',
@@ -495,7 +495,7 @@ function actionFor(kind: string, body: ActionBody): {
     // is not predictable here — object::new runs on the validator — so it has to be
     // read back from the transaction afterwards. See NOTES on the position cycle.
     return {
-      script: 'src/create-position.js',
+      script: 'src/create-position.ts',
       env: {},
       proposal: { action: 'open a guarded position' },
     };
@@ -510,7 +510,7 @@ function actionFor(kind: string, body: ActionBody): {
     if (usdc > 10_000_000n) return { error: 'fixAmountUsdc above 10 USDC is not allowed here' };
     if (sui > 5_000_000_000n) return { error: 'supplySui above 5 SUI is not allowed here' };
     return {
-      script: 'src/deposit-liquidity.js',
+      script: 'src/deposit-liquidity.ts',
       // SUPPLY_SUI is headroom, not a spend: the module adds a fixed USDC amount and
       // routes whatever the SUI side does not consume back to the destination.
       env: {
@@ -539,7 +539,7 @@ function actionFor(kind: string, body: ActionBody): {
       };
     }
     return {
-      script: 'src/rebalance.js',
+      script: 'src/rebalance.ts',
       env: {
         NEW_TICK_LOWER: String(lo), NEW_TICK_UPPER: String(hi),
         GUARD_ID: activeGuard.id, GUARD_SHARED_VERSION: String(activeGuard.version),
@@ -549,7 +549,7 @@ function actionFor(kind: string, body: ActionBody): {
   }
   if (kind === 'redeem') {
     return {
-      script: 'src/redeem.js',
+      script: 'src/redeem.ts',
       env: { GUARD_ID: activeGuard.id, GUARD_SHARED_VERSION: String(activeGuard.version) },
       proposal: { action: 'exit the position' },
     };
@@ -563,7 +563,7 @@ function actionFor(kind: string, body: ActionBody): {
     // This is also the step that must happen BEFORE a package upgrade: an upgrade
     // replaces code, and the safe moment to change code is while the vault is empty.
     return {
-      script: 'src/withdraw-vault.js',
+      script: 'src/withdraw-vault.ts',
       env: {},
       proposal: { action: 'withdraw the whole vault', destination: DEPLOYER },
     };
@@ -581,7 +581,7 @@ function actionFor(kind: string, body: ActionBody): {
     if (bps > 500n) return { error: 'the policy refuses a bound above 500 bps' };
 
     return {
-      script: 'src/hire-agent.js --repoint',
+      script: 'src/hire-agent.ts --repoint',
       env: { HIRE: body.hire, AGENT: agent, BOUND_BPS: String(bps) },
       proposal: {
         action: 'hand the grant to a different agent, and bound its price',
@@ -666,7 +666,7 @@ function actionFor(kind: string, body: ActionBody): {
     if (amount > 10_000_000_000n) return { error: 'escrow above 10 SUI is not allowed here' };
 
     return {
-      script: 'src/create-order.js',
+      script: 'src/create-order.ts',
       // No TTL from the browser: the UI has no field for it, so the script's own default
       // applies — 60 seconds, set in create-order.js. (This comment said 24 hours, which
       // was never true; the TTL has always been a minute, and ORDER-ESCROW.md and
@@ -719,7 +719,7 @@ function actionFor(kind: string, body: ActionBody): {
       return { error: 'orderId must be a full 0x object id (64 hex characters)' };
     }
     return {
-      script: 'src/burn-order.js',
+      script: 'src/burn-order.ts',
       env: { ORDER_ID: orderId },
       proposal: { action: 'reclaim a settled order\u2019s storage', orderId },
     };

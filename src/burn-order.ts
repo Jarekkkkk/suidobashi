@@ -98,9 +98,12 @@ async function main() {
   }
 
   if (EXECUTE) {
+    if (!signer) throw new Error('no signer — this path requires --execute');
     const sent = await client.signAndExecuteTransaction({ transaction: bytes, signer });
     // A failed transaction comes back under FailedTransaction, not Transaction.
-    const result = sent?.Transaction ?? sent?.FailedTransaction ?? sent ?? {};
+    // `any` because the fallback chain can land on the WRAPPER, which carries no digest —
+    // the wrapper shape is { $kind, Transaction } and the payload is one level down.
+    const result: any = sent?.Transaction ?? sent?.FailedTransaction ?? {};
     console.log(JSON.stringify({
       mode: 'execute',
       step: 'burn a settled order',
@@ -114,8 +117,8 @@ async function main() {
   }
 
   const res = await client.simulateTransaction({ transaction: bytes });
-  const status = res?.Transaction?.status ?? res?.status ?? null;
-  const ok = status?.success === true || status?.status === 'success';
+  const status = res?.Transaction?.status ?? null;
+  const ok = status?.success === true;
   console.log(JSON.stringify({
     mode: 'dry-run',
     step: 'burn a settled order',

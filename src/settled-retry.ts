@@ -25,15 +25,17 @@
 const TOO_EARLY = /ENotSettled|has not been settled/i;
 
 export async function buildWithSettledRetry(
-  build,
-  { attempts = 8, delayMs = 400, sleep } = {},
+  build: () => Promise<Uint8Array>,
+  { attempts = 8, delayMs = 400, sleep }: {
+    attempts?: number; delayMs?: number; sleep?: (ms: number) => Promise<void>;
+  } = {},
 ) {
-  const wait = sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const wait = sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   for (let i = 1; i <= attempts; i++) {
     try {
       return await build();
     } catch (e) {
-      const tooEarly = TOO_EARLY.test(String(e?.message || e));
+      const tooEarly = TOO_EARLY.test(String((e as any)?.message ?? e));
       if (!tooEarly || i === attempts) throw e;
       await wait(delayMs);
     }

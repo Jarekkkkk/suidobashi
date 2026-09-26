@@ -143,7 +143,9 @@ async function main() {
   // the call would fail deeper in the SDK with something less legible.
   if (!signer) throw new Error('no signer — this path requires --execute');
   const sent = await client.signAndExecuteTransaction({ transaction: bytes, signer });
-  const result = sent?.Transaction ?? sent?.FailedTransaction ?? sent ?? {};
+  // `any` because the fallback chain can land on the WRAPPER, which carries no digest —
+    // the wrapper shape is { $kind, Transaction } and the payload is one level down.
+    const result: any = sent?.Transaction ?? sent?.FailedTransaction ?? {};
   console.log(JSON.stringify({
     mode: 'executed',
     step: 'refund an expired order',

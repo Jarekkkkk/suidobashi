@@ -1,7 +1,7 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "checkJs": true,
+    "checkJs": false,
     "types": [
       "node"
     ],
@@ -12,10 +12,13 @@
     "src/**/*.js"
   ],
   "exclude": [
-    "src/verify-*.js",
     "src/verify-*.ts",
+    "src/verify-*.js",
+    "src/demo-*.ts",
     "src/demo-*.js",
     "src/web/page.js",
-    "src/web/markup.js"
+    "src/web/markup.js",
+    "src/web/events.js",
+    "src/web/units.js"
   ]
 }

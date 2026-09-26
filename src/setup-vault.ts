@@ -103,8 +103,8 @@ async function main() {
   if (!EXECUTE) {
     const res = await client.simulateTransaction({ transaction: bytes });
     // gRPC returns a command-shaped envelope: { $kind: 'Transaction', Transaction: { status } }
-    const status = res?.Transaction?.status ?? res?.status ?? null;
-    const ok = status?.success === true || status?.status === 'success';
+    const status = res?.Transaction?.status ?? null;
+    const ok = status?.success === true;
     console.log(JSON.stringify({
       mode: 'dry-run',
       phase: 'A',
@@ -116,17 +116,24 @@ async function main() {
     return;
   }
 
+  // The keypair is only built on the --execute path, so the compiler is right that it could be
+  // null. Saying so explicitly beats failing deeper in the SDK with something less legible.
+  if (!keypair) throw new Error('no keypair — this path requires a key');
   const res = await client.signAndExecuteTransaction({
     transaction: bytes,
     signer: keypair,
     include: { effects: true, objectTypes: true },
   });
+  // The result NESTS under Transaction. Reading `res.digest` directly is the trap already
+  // documented in NOTES — it reports digest: null for precisely the failures that matter, which
+  // cost one paid transaction to discover the first time.
+  const result: any = res.Transaction ?? res.FailedTransaction ?? {};
   console.log(JSON.stringify({
     mode: 'executed',
     phase: 'A',
-    digest: res.digest,
-    status: res.effects?.status,
-    changes: res.effects?.changedObjects,
+    digest: result.digest,
+    status: result.effects?.status,
+    changes: result.effects?.changedObjects,
   }, null, 2));
 }
 

@@ -30,7 +30,7 @@
  * and this process holds no key. Use the UI to sign and submit.
  */
 import 'dotenv/config';
-import { HIRES, HIRE_NAMES, DEFAULT_HIRE } from './hires.js';
+import { HIRES, HIRE_NAMES, DEFAULT_HIRE, type Hire, type HireName } from './hires.js';
 
 const QVAC_URL = process.env.QVAC_URL || 'http://127.0.0.1:11434/v1/chat/completions';
 const MODEL = process.env.QVAC_MODEL || 'intent';
@@ -113,7 +113,7 @@ const RESPONSE_FORMAT = {
  * Exact decimal → MIST. No floating point: parse the string by hand so "0.05"
  * cannot become 0.05000000000000001 MIST.
  */
-function parseAmountText(text) {
+function parseAmountText(text: string) {
   const t = String(text ?? '').trim();
   if (t === '') return { ok: true, amountMist: 0n };
   if (!/^\d+(\.\d{1,9})?$/.test(t)) {
@@ -124,10 +124,10 @@ function parseAmountText(text) {
   return { ok: true, amountMist: BigInt(whole) * SUI_MIST + BigInt(padded) };
 }
 
-async function parseIntent(text) {
-  const messages = [{ role: 'system', content: SYSTEM_PROMPT }];
+async function parseIntent(text: string) {
+  const messages: { role: string; content: string }[] = [{ role: 'system', content: SYSTEM_PROMPT }];
   for (const [user, intent] of EXAMPLES) {
-    messages.push({ role: 'user', content: user });
+    messages.push({ role: 'user', content: String(user) });
     messages.push({ role: 'assistant', content: JSON.stringify(intent) });
   }
   messages.push({ role: 'user', content: text });
@@ -167,7 +167,7 @@ async function parseIntent(text) {
  * gate verifies the claim against the user's own words. Deterministic, and it
  * needs no cooperation from the model.
  */
-function grounded(text, value) {
+function grounded(text: string, value: unknown) {
   if (!value) return false;
   return text.toUpperCase().includes(String(value).toUpperCase());
 }
@@ -184,7 +184,7 @@ function grounded(text, value) {
  * text is the same division used for the amount (the model extracts, code
  * computes) and for direction grounding (code verifies).
  */
-function selectHire(text) {
+function selectHire(text: string) {
   const named = HIRE_NAMES.filter(
     (n) => new RegExp(`\\b${n}\\b`, 'i').test(text),
   );
@@ -198,7 +198,7 @@ function selectHire(text) {
       reason: `the request names more than one hire (${named.join(', ')}) — say which one`,
     };
   }
-  return { ok: true, hire: HIRES[named[0]], named };
+  return { ok: true, hire: HIRES[named[0] as HireName], named };
 }
 
 /**
@@ -211,13 +211,32 @@ function selectHire(text) {
  * A missing or ungrounded direction is a refusal, never a default. Refusing on
  * ambiguity is the entire job of this function.
  */
-function validate(intent, amountMist, { walletSuiMist, text, hire, policy }) {
+// `intent` is the local model's extraction, so it is `any` on purpose: the whole point of
+// `validate` is that it cannot be trusted, and every field is checked before use. Typing it
+// would be a claim about what a 0.6B model emits.
+function validate(
+intent: any,
+amountMist: bigint | null,
+{ walletSuiMist, text, hire, policy }: {
+walletSuiMist: bigint; text: string; hire: Hire | null; policy: any;
+},
+) {
   if (!intent || typeof intent !== 'object') return { ok: false, reason: 'not an object' };
   if (!ACTIONS.includes(intent.action)) {
     return { ok: false, reason: `action "${intent.action}" is not in the allowlist` };
   }
   if (intent.action === 'unknown') {
     return { ok: false, reason: 'request is not one of the supported actions' };
+  }
+
+  // A hire must exist before anything else is judged. The code below read `hire.name` on the
+  // assumption that one always had, which the compiler now refuses — and it is right: a null
+  // hire would have thrown on the FIRST suspension message rather than refusing cleanly.
+  if (!hire) {
+    return {
+      ok: false,
+      reason: `no hire matched — name one of: ${HIRE_NAMES.join(', ')}`,
+    };
   }
 
   // Suspension is checked before anything else, because it is the owner's
@@ -293,7 +312,7 @@ function validate(intent, amountMist, { walletSuiMist, text, hire, policy }) {
 }
 
 /** Map a validated intent onto the script that already proves the operation. */
-function planFor(intent, amountMist, hire) {
+function planFor(intent: any, amountMist: bigint | null, hire: Hire) {
   const sui = (Number(amountMist) / Number(SUI_MIST)).toFixed(4);
   switch (intent.action) {
     case 'swap': {
@@ -338,7 +357,7 @@ function planFor(intent, amountMist, hire) {
  * the moment anyone changed the allowlist or suspended the hire, and those are the
  * fields the whole boundary rests on.
  */
-async function policyState(hire) {
+async function policyState(hire: Hire) {
   const { SuiGrpcClient } = await import('@mysten/sui/grpc');
   const client = new SuiGrpcClient({
     network: 'mainnet',
@@ -346,15 +365,17 @@ async function policyState(hire) {
   });
   try {
     const o = await client.getObject({ objectId: hire.policyId, include: { json: true } });
-    const j = (o.object ?? o).json ?? {};
-    const list = (j.allowed_pools?.contents ?? []).map((x) => String(x).toLowerCase());
+    // A Move struct's JSON as the chain returns it. The shape belongs to the chain, and
+    // declaring fields here would be a second copy of that contract.
+    const j: any = (o.object ?? o).json ?? {};
+    const list: string[] = (j.allowed_pools?.contents ?? []).map((x: unknown) => String(x).toLowerCase());
     return {
       venueOpen: list.includes(String(hire.venue.id).toLowerCase()),
       venueCount: list.length,
       suspended: Boolean(j.suspended),
     };
   } catch (e) {
-    return { venueOpen: false, venueCount: null, suspended: false, error: String(e?.message || e).slice(0, 80) };
+    return { venueOpen: false, venueCount: null, suspended: false, error: String((e as any)?.message ?? e).slice(0, 80) };
   }
 }
 
@@ -412,13 +433,15 @@ async function main() {
   // Which hire applies is decided from the request text, not from the model's
   // opinion. See selectHire.
   const hirePick = selectHire(text);
-  const hire = hirePick.ok ? hirePick.hire : null;
+  // `?? null` because the pick's return type has `hire` optional — it is absent on the refusal
+  // branch — so a caller reading it gets `Hire | undefined` rather than `Hire | null`.
+  const hire = hirePick.ok ? (hirePick.hire ?? null) : null;
   const policy = hire ? await policyState(hire) : null;
 
   let verdict;
   if (!hirePick.ok) verdict = { ok: false, reason: hirePick.reason };
   else if (!parsed.ok) verdict = { ok: false, reason: parsed.reason };
-  else verdict = validate(intent, amountMist, { walletSuiMist, text, hire, policy });
+  else verdict = validate(intent, amountMist ?? null, { walletSuiMist, text, hire, policy });
 
   let decidedBy;
   if (hirePick.named.length === 1) decidedBy = `request text names "${hirePick.named[0]}"`;
@@ -450,7 +473,7 @@ async function main() {
       groundedInRequest: intent.agent ? grounded(text, intent.agent) : false,
       consulted: false,
     },
-    amountMist: amountMist === null ? null : amountMist.toString(),
+    amountMist: amountMist == null ? null : amountMist.toString(),
     walletBalanceMist: walletSuiMist.toString(),
     validation: verdict,
   };
@@ -460,7 +483,13 @@ async function main() {
     process.exit(1);
   }
 
-  const plan = planFor(intent, amountMist, hire);
+    // The verdict above already refused a null hire, so this is the compiler needing to be told
+    // what the control flow guarantees rather than a case the code can reach.
+    if (!hire) {
+      console.log(JSON.stringify({ ...report, decision: 'REFUSED', reason: 'no hire' }, null, 2));
+      process.exit(1);
+    }
+    const plan = planFor(intent, amountMist ?? null, hire);
 
   if (!plan) {
     console.log(JSON.stringify({ ...report, decision: 'REFUSED', reason: 'no plan' }, null, 2));
