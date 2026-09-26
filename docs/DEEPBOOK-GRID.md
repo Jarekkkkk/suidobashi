@@ -277,11 +277,12 @@ Built. The maker's wallet, or their own runner, is the `agent`; `set_agent` rota
   seat with one `set_agent(maker)` and clears their own orders
   (`the_maker_can_take_the_agent_seat_and_unwind`).
 
-One dependency is **not** verified, and it is the one that decides (b)'s economics: whether a single
-transaction may touch many guards and one pool, so N users cost one transaction instead of N. Every
-order path takes `&mut Pool`, and whether Sui permits the same shared Pool as a mutable argument in
-several commands of one PTB is a question about the transaction, not about this module. Needs a dry
-run against the published package. Until then: one transaction per guard.
+**Answered, and the answer is yes.** Whether one transaction may take `&mut Pool` in several commands
+was the open question deciding (b)'s economics — N users in one transaction rather than N. The
+runner's own ladder settles it: `src/run-grid.ts` builds a five-level grid as five order placements
+against the same pool in ONE transaction, and that transaction resolves and executes. The failure it
+reports is DeepBook's balance check on the account — a statement about money, not about the shape of
+the transaction. One transaction per guard is not required.
 
 **Built for (b).** `src/runner.ts` is one operator's decision half: a pure function of a guard's
 state, the book, and what is already resting, checked by 29 assertions in `src/verify-runner.js`.

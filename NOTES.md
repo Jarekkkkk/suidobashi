@@ -703,6 +703,14 @@ it is a quietly older answer, and it looks exactly like a transaction that did n
 version is the right convention here (`settle-order.ts`), but it has to be the REAL one, read from
 the object, or left to the SDK.
 
+**One transaction MAY take `&mut` on the same shared object in several commands.** This was carried as
+an open question for most of the project, because it decides whether a managed operator can serve N
+users in one transaction or needs N. It had the answer all along: `src/run-grid.ts` builds a
+five-level grid as five `place_limit_order` commands against one pool, and the transaction resolves
+and executes — the abort it reports is DeepBook's balance check, one frame in, not a complaint about
+the transaction's shape. A PTB that repeats a shared mutable argument is fine; check the shape by
+submitting one and reading which command failed, rather than by reasoning about borrow rules.
+
 ## Mainnet feature flags (protocol 136, read from the node)
 
 ```text
