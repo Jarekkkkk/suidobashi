@@ -25,6 +25,20 @@ the budget is authority, and they are not the same number.
 
 ### Proven on mainnet, by real transactions
 
+- **The runner places a ladder that rests.** `5AUNpgwf2UFcSzd3Bg3hB1W7J6wNyxnkuDdMvkQ5sj6u` — one ask,
+  read back afterwards as `resting: 1` with `committed` at 3 SUI. That the read-back works at all is the
+  fix from earlier in this file: the include keys are `effects` and `events`, and re-reading is what
+  distinguishes "submitted" from "on the book".
+- **The order that looked lost had FILLED.** The 1 SUI ask at price 1153770 was matched, and the
+  account came to hold exactly 1153770 — 1.15377 USDC, that order's own price. It was never
+  unaccounted for: the placement event said `executed_quantity: 0`, which was true AT PLACEMENT, and
+  the fill happened in a later transaction nobody had read. An event describes a moment; a balance
+  describes the sum of all of them.
+- **DeepBook's expiry does not return an escrow by itself.** An order placed with a ONE-MINUTE expiry
+  was still resting 75 seconds later, funds still locked. Something has to prune it, so "expired
+  orders return locked funds to settled balances" describes a state an order can reach, not
+  something the chain does on a timer — and a runner relying on expiry to free capital relies on
+  nothing.
 - **The whole guard loop, end to end.** `setup` `DHyecWbaGo9bfXz1ehqSXtv9EWsgHrG8jM72vthKQC3t`
   (account + guard in ONE transaction, owned by the deployer), `deposit`
   `BJNxb9PZYBXCMysoUnWRMdvNQUg21QmKtBnp5i1UJFn6` (1.5 SUI, DeepBook's owner path), **`order`
