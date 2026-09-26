@@ -24,7 +24,7 @@ import { spawnSync } from 'node:child_process';
 // One reader of the allowance ledger. It lives in agent.ts because the GATE needs it too —
 // checking it only on chain means the refusal arrives as a MoveAbort with no numbers in it.
 import { allowanceMist } from './agent.js';
-import { VAULT_ID, DEPLOYER, USDC_TYPE, REWARD_TYPE, PACKAGE_LATEST_ID, POOL_TICK_SPACING, GUARD_ID, GUARD_SHARED_VERSION, SLIPPAGE_BPS, COINS, DIRECTIONS, DEEPBOOK_GUARD_PACKAGE, type Direction } from './addresses.js';
+import { VAULT_ID, DEPLOYER, USDC_TYPE, REWARD_TYPE, PACKAGE_LATEST_ID, POOL_TICK_SPACING, GUARD_ID, GUARD_SHARED_VERSION, SLIPPAGE_BPS, COINS, DIRECTIONS, DEEPBOOK_GUARD_PACKAGE, DEEPBOOK_GUARD_ID, DEEPBOOK_BALANCE_MANAGER_ID, type Direction } from './addresses.js';
 import { HIRES } from './hires.js';
 import { MARKETPLACE, describeTalents, serverForAction, talentFor } from './talents.js';
 import { STRATEGIES } from './strategies.js';
@@ -1614,6 +1614,52 @@ const server = http.createServer((req, res) => {
       blocked: DEEPBOOK_GUARD_PACKAGE === null
         ? 'the guard module is not published yet, so there is no guard to point at an operator'
         : 'the guard module is live; the flow that creates one from here is not built yet',
+    }));
+  }
+
+  // The live guard, as the RUNNER sees it — a shell-out rather than a second reader.
+  //
+  // The runner already reads the guard's limits, the book, the open orders and the account's funds in
+  // ONE simulation. A page that read them again its own way would be a second implementation to drift,
+  // and its first version would read the money WRONG: BalanceManager balances live in dynamic fields,
+  // so no plain object read sees them at all. Slower this way, and it cannot disagree with what a
+  // pass would actually do — which is the whole job of a page whose purpose is to say what a pass
+  // would do.
+  if (req.url === '/api/guard' || req.url === '/api/guard/run') {
+    if (!DEEPBOOK_GUARD_ID || !DEEPBOOK_BALANCE_MANAGER_ID) {
+      return send(200, JSON.stringify({
+        configured: false,
+        reason: 'no guard is named in src/addresses.ts',
+      }));
+    }
+    const args = [
+      'src/run-grid.ts',
+      '--guard', DEEPBOOK_GUARD_ID,
+      '--bm', DEEPBOOK_BALANCE_MANAGER_ID,
+      '--side', 'ask',
+      '--levels', '1',
+      '--expire-min', '5',
+    ];
+    // A GET is a pass that changes nothing; a POST is the same pass, signed.
+    if (req.url === '/api/guard/run') args.push('--execute');
+    const out = spawnSync('bun', args, { cwd: process.cwd(), encoding: 'utf8', timeout: 120_000 });
+    // The runner prints one JSON object per step, each starting a line — the plan, and after an
+    // execute the outcome and the read-back.
+    const steps = (out.stdout ?? '')
+      .split(/\n(?=\{)/)
+      .flatMap((chunk) => {
+        try {
+          return [JSON.parse(chunk)];
+        } catch {
+          return [];
+        }
+      });
+    return send(200, JSON.stringify({
+      configured: true,
+      ran: req.url === '/api/guard/run',
+      steps,
+      status: out.status,
+      stderr: (out.stderr ?? '').trim().slice(0, 500) || null,
     }));
   }
 

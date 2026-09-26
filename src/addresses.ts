@@ -289,3 +289,15 @@ export const DEPLOYER =
  * instead of offering an action that could not work.
  */
 export const DEEPBOOK_GUARD_PACKAGE: string | null = PACKAGE_LATEST_ID;
+
+/**
+ * The live testing guard and its account, created by `bun src/ship-deepbook.ts --step setup`.
+ *
+ * Both are objects, not packages: the guard is the wrapper, the BalanceManager is the DeepBook
+ * account it acts for. Recorded here because the app has to name them and a UI that asks the user
+ * to paste ids is a UI nobody tests with.
+ */
+export const DEEPBOOK_GUARD_ID =
+  '0xbccb9aff5769ed17188360e903a3a3a1f79bc6efd18b80e2882fb01742aa5d7a';
+export const DEEPBOOK_BALANCE_MANAGER_ID =
+  '0x8fc885699d7bddc49d3c76dbf6c4b270c3075cdae192a0f19e4ec61d8aee8aa0';

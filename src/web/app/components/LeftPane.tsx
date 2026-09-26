@@ -10,6 +10,7 @@ import { PolicySheet } from '@/components/PolicySheet';
 import { ChatsPane } from '@/components/ChatsPane';
 import { TalentsPane } from '@/components/TalentsPane';
 import { StrategiesPane } from '@/components/StrategiesPane';
+import { GuardPane } from '@/components/GuardPane';
 
 /*
  * The left pane: what is installed, and what is left over.
@@ -148,7 +149,7 @@ export function LeftPane({
   onDisconnect,
 }: LeftPaneProps) {
   // Chats first: it is the tab you return to, and the one that says what the app is for.
-  const [tab, setTab] = useState<'chats' | 'talents' | 'strategies' | 'notifications'>('chats');
+  const [tab, setTab] = useState<'chats' | 'talents' | 'guard' | 'strategies' | 'notifications'>('chats');
   const [out, setOut] = useState<Outstanding | null>(null);
   const [hires, setHires] = useState<Hire[] | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -308,8 +309,9 @@ export function LeftPane({
         <Tab active={tab === 'chats'} onClick={() => setTab('chats')}>chats</Tab>
         <Tab active={tab === 'talents'} onClick={() => setTab('talents')}>talents</Tab>
         {/* Strategies sit beside talents because they are the same kind of thing to a maker: a
-            capability on offer, which they decide whether to hand anything. */}
-        <Tab active={tab === 'strategies'} onClick={() => setTab('strategies')}>strategies</Tab>
+            capability on offer, which they decide whether to hand anything. Guard is the live one —
+            the account those offers are pointed at. */}
+        <Tab active={tab === 'guard'} onClick={() => setTab('guard')}>guard</Tab>
         <Tab active={tab === 'strategies'} onClick={() => setTab('strategies')}>strategies</Tab>
         <Tab active={tab === 'notifications'} onClick={() => setTab('notifications')}>
           outstanding
@@ -347,6 +349,13 @@ export function LeftPane({
         )}
 
         {tab === 'strategies' && <StrategiesPane />}
+
+        {tab === 'guard' && (
+          <div className="flex h-full flex-col">
+            {/* The account, its limits, and one button that runs a pass against it. */}
+            <GuardPane />
+          </div>
+        )}
 
         {tab === 'strategies' && (
           <div className="flex h-full flex-col">

@@ -281,6 +281,9 @@ async function main() {
       would: { cancel: plan.cancel.length, place: plan.place.length },
       levels: plan.place.map((l) => l.price.toString()),
       inOneTransaction: plan.cancel.length + plan.place.length,
+      // The money on the success path too, not only when refusing. A pass that can proceed is
+      // exactly when a reader wants to see what it is about to spend, and the UI shows this.
+      funds: { sui: account.sui.toString(), usdc: account.usdc.toString() },
       key: keyName,
       note: 'no key used to sign — a simulation checks the caller, so this proves the gate passes',
     }, null, 2));
@@ -306,6 +309,7 @@ async function main() {
     step: 'run-grid:after',
     resting: after.open.length,
     committed: after.guard.committed.toString(),
+    funds: { sui: after.account.sui.toString(), usdc: after.account.usdc.toString() },
   }, null, 2));
 }
 
