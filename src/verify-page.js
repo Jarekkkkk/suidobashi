@@ -229,6 +229,47 @@ for (const name of new Set(scriptNames)) {
     'the server appends --emit-bytes; ignoring it prints JSON as if it were transaction bytes');
 }
 
+// A .d.ts CAN DRIFT FROM THE .js IT DESCRIBES, and nothing else would notice.
+//
+// This is the same failure as --emit-bytes: a contract in one file that the code in another
+// does not honour. A .d.ts is the worse version of it, because TypeScript never checks a
+// declaration against the implementation it claims to describe — so a stale one is a second
+// source of truth that every reader trusts and no tool contradicts.
+//
+// VALUE exports must match in both directions. Types may be declaration-only: a union like
+// EventKind exists to be named, not to be a runtime value, and requiring a matching const
+// would push people to invent one.
+const DECLARED = /^export\s+(?:declare\s+)?(?:const|function|class|let|var)\s+([A-Za-z_$][\w$]*)/gm;
+const TYPED = /^export\s+(?:declare\s+)?type\s+([A-Za-z_$][\w$]*)/gm;
+const valueNames = (src) => new Set([...src.matchAll(DECLARED)].map((m) => m[1]));
+const typeNames = (src) => new Set([...src.matchAll(TYPED)].map((m) => m[1]));
+
+for (const base of ['events', 'units']) {
+  const jsSrc = fs.readFileSync(new URL(`./web/${base}.js`, import.meta.url), 'utf-8');
+  const dtsSrc = fs.readFileSync(new URL(`./web/${base}.d.ts`, import.meta.url), 'utf-8');
+  const jsVals = valueNames(jsSrc);
+  const dtsVals = valueNames(dtsSrc);
+
+  check(`${base}.js exports at least one value`, jsVals.size > 0,
+    `found ${jsVals.size} — the regex may have stopped matching`);
+  check(`${base}.d.ts declares at least one value`, dtsVals.size > 0,
+    `found ${dtsVals.size} — a declaration that describes nothing types nothing`);
+
+  for (const n of jsVals) {
+    check(`${base}.d.ts declares "${n}"`, dtsVals.has(n),
+      'the .js exports it and the .d.ts does not — consumers would not see it');
+  }
+  for (const n of dtsVals) {
+    check(`${base}.js exports "${n}"`, jsVals.has(n),
+      'the .d.ts declares it and the .js does not — the declaration is describing something absent');
+  }
+  // A name cannot be both, or the module has two incompatible things called the same thing.
+  for (const n of typeNames(dtsSrc)) {
+    check(`${base}: "${n}" is not declared as both a value and a type`, !dtsVals.has(n),
+      'the same name as a value and a type shadows itself');
+  }
+}
+
 if (failures) {
   console.error(`\n${failures} check(s) failed.`);
   process.exit(1);
