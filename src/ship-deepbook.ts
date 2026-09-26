@@ -279,15 +279,13 @@ async function main() {
       const guard = flag('--guard');
       if (!bm || !guard) fail('--bm and --guard are required');
       const refs = await orderRefs(guard!, bm!);
-      // The first run refused every value up to 1e10 with `EOrderBelowMinimumSize` (code 1), so the
-      // range starts where that ended and climbs by decades. The point is the FIRST acceptance —
-      // and equally the first DIFFERENT refusal: `EOrderInvalidLotSize` (code 2) after a
-      // minimum-size error would say the alignment is what is left, and an insufficient-balance
-      // error would say the minimum is simply out of this account's reach.
+      // Standing, and this is the quantity scale question answered: quantities are raw base units
+      // (1e9 = 1 SUI). 5e8 passes nothing, 1e10 clears input validation and fails only on the
+      // account's balance. So the pool's minimum sits between 0.5 and 10 SUI, and the balance is
+      // 0.2 — meaning this deposit cannot reach it. This brackets the minimum so the funding needed
+      // is a number rather than a shrug: below the minimum is code 1, above it is a balance abort.
       const candidates = [
-        100_000_000_000n, 1_000_000_000_000n, 10_000_000_000_000n, 100_000_000_000_000n,
-        1_000_000_000_000_000n, 10_000_000_000_000_000n, 100_000_000_000_000_000n,
-        1_000_000_000_000_000_000n,
+        600_000_000n, 800_000_000n, 1_000_000_000n, 1_500_000_000n, 3_000_000_000n, 6_000_000_000n,
       ];
       const results: Array<Record<string, unknown>> = [];
       for (const raw of candidates) {

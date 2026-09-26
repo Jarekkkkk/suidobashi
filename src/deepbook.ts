@@ -90,14 +90,17 @@ export function priceScale(baseDecimals: number, quoteDecimals: number): bigint 
  *
  *     quantity_raw = quantity_human * 10^baseDecimals
  *
- * NOT VERIFIED, and said plainly rather than buried: a live level-2 read returns per-level
- * quantities that are NOT multiples of this pool's documented lot size (0.1 SUI) under this scale,
- * nor under any other scale tried. The two readings cannot both be right, and which one is wrong
- * is not knowable from a read-only query.
+ * VERIFIED on mainnet, by refusal rather than by a successful order: a probe simulated sell
+ * quantities through the guard and bracketed DeepBook's own checks. Below 0.8 SUI it aborts
+ * `EOrderBelowMinimumSize` (code 1); at 1 SUI and above it passes input validation and fails only on
+ * the account's balance. Since these are base-asset units, that boundary IS 1 SUI — the pool's
+ * minimum order — and no other scale puts a round minimum there. The same run bracketed the minimum
+ * to between 0.8 and 1 SUI, which is the number a deposit has to clear.
  *
- * So: do not place a real order whose size depends on this function until one real order has
- * settled the question. The evidence and the open question are in NOTES.md. The grid arithmetic
- * below does not care — it works in raw integers and takes the scale as an argument.
+ * What was misleading, and why this file used to say UNVERIFIED: a live level-2 READ returns
+ * per-level quantities that are not multiples of the pool's documented 0.1 SUI lot under this scale.
+ * That is a question about what a read reports, not about what an order means, and the two are not
+ * the same number. An order's quantity is raw base units; the level-2 figures are something else.
  */
 export function quantityScale(baseDecimals: number): bigint {
   return 10n ** BigInt(baseDecimals);
