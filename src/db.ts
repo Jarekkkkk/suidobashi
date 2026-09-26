@@ -66,6 +66,20 @@ function migrate(db: Database) {
       prompt        TEXT,
       installed_at  INTEGER NOT NULL
     );
+
+    -- What a user asked to happen on a clock. This table is INTENT; the poller in the MCP server
+    -- is what acts on it, so a restart does not silently cancel a schedule the user believes is
+    -- running. every_seconds rather than a cron expression: the poller ticks on an interval, and
+    -- parsing cron correctly is a dependency this earns nothing from.
+    CREATE TABLE IF NOT EXISTS schedules (
+      id             TEXT PRIMARY KEY,
+      action         TEXT NOT NULL,
+      params         TEXT NOT NULL,
+      every_seconds  INTEGER NOT NULL,
+      enabled        INTEGER NOT NULL DEFAULT 1,
+      last_fired_at  INTEGER,
+      created_at     INTEGER NOT NULL
+    );
   `);
   // Foreign keys are off by default in SQLite, per connection.
   db.run('PRAGMA foreign_keys = ON');
@@ -212,6 +226,60 @@ export function installTalent(id: string, name: string, manifest: unknown, promp
 
 export function uninstallTalent(id: string) {
   open().run('DELETE FROM talents WHERE id = ?', [id]);
+}
+
+/** A recurring request: what to do, how often, and when it last happened. */
+export type Schedule = {
+  id: string;
+  action: string;
+  params: Record<string, unknown>;
+  everySeconds: number;
+  enabled: boolean;
+  lastFiredAt: number | null;
+  createdAt: number;
+};
+
+export function listSchedules(): Schedule[] {
+  const sql =
+    'SELECT id, action, params, every_seconds AS everySeconds, enabled, last_fired_at AS lastFiredAt, created_at AS createdAt FROM schedules ORDER BY created_at';
+  const rows = open().query(sql).all() as (Omit<Schedule, 'params' | 'enabled'> & {
+    params: string;
+    enabled: number;
+  })[];
+  // The same treatment a talent's manifest gets: parsed on the way out, and a row that will not
+  // parse is skipped rather than thrown, because the list is what the user sees.
+  const out: Schedule[] = [];
+  for (const r of rows) {
+    try {
+      out.push({ ...r, params: JSON.parse(r.params), enabled: r.enabled === 1 });
+    } catch {
+      // Unreadable row: not a schedule, from the poller's point of view.
+    }
+  }
+  return out;
+}
+
+export function createSchedule(action: string, params: unknown, everySeconds: number): string {
+  const id = crypto.randomUUID();
+  open().run(
+    'INSERT INTO schedules (id, action, params, every_seconds, enabled, created_at) '
+    + 'VALUES (?, ?, ?, ?, 1, ?)',
+    [id, action, JSON.stringify(params), everySeconds, Date.now()],
+  );
+  return id;
+}
+
+export function setScheduleEnabled(id: string, enabled: boolean) {
+  open().run('UPDATE schedules SET enabled = ? WHERE id = ?', [enabled ? 1 : 0, id]);
+}
+
+export function deleteSchedule(id: string) {
+  open().run('DELETE FROM schedules WHERE id = ?', [id]);
+}
+
+/** Stamped after a run, so the next tick can tell whether the schedule is due. */
+export function markScheduleFired(id: string, at: number) {
+  open().run('UPDATE schedules SET last_fired_at = ? WHERE id = ?', [at, id]);
 }
 
 /** Where the file is, for the one place that reports it. */

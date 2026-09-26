@@ -298,12 +298,110 @@ async function fill(orderId: string) {
   };
 }
 
+import { spawnSync } from 'node:child_process';
+import { DEEPBOOK_GUARD_ID, DEEPBOOK_BALANCE_MANAGER_ID } from './addresses.js';
+import {
+  createSchedule,
+  deleteSchedule,
+  listSchedules,
+  markScheduleFired,
+} from './db.js';
+
+/**
+ * Run the grid runner and hand back what it printed.
+ *
+ * A shell-out to the same CLI a person runs, NOT a second implementation of it. One behaviour with
+ * three entry points — a person, an agent, and the clock below — and none of them can disagree with
+ * the others about what a pass does. It is slower, and it is the only version that stays true when
+ * the runner changes.
+ */
+function runGrid(extra: string[]) {
+  const out = spawnSync(
+    'bun',
+    ['src/run-grid.ts', '--guard', DEEPBOOK_GUARD_ID, '--bm', DEEPBOOK_BALANCE_MANAGER_ID, ...extra],
+    { cwd: process.cwd(), encoding: 'utf8', timeout: 120_000 },
+  );
+  // The runner prints one JSON object per step, each starting a line.
+  const steps = (out.stdout ?? '').split(/\n(?=\{)/).flatMap((chunk) => {
+    try {
+      return [JSON.parse(chunk)];
+    } catch {
+      return [];
+    }
+  });
+  return { status: out.status, steps, stderr: (out.stderr ?? '').trim().slice(0, 400) || null };
+}
+
+/**
+ * The clock. Whatever a user asked for and has not happened yet.
+ *
+ * The stamp is written BEFORE the work rather than after: a pass that dies half way would otherwise
+ * still be due on the next tick, and be retried every thirty seconds forever. Late is a schedule
+ * that runs a moment after it was asked to; the alternative is one that never stops asking.
+ */
+async function fireDueSchedules() {
+  const now = Date.now();
+  for (const s of listSchedules()) {
+    if (!s.enabled) continue;
+    const due = s.lastFiredAt === null || now - s.lastFiredAt >= s.everySeconds * 1000;
+    if (!due) continue;
+    markScheduleFired(s.id, now);
+    try {
+      const side = String(s.params.side ?? 'ask');
+      const out = runGrid(['--side', side, '--levels', '1', '--execute']);
+      console.log(JSON.stringify({ scheduled: s.id, action: s.action, ok: out.status === 0, steps: out.steps.length }));
+    } catch (e) {
+      console.log(JSON.stringify({ scheduled: s.id, action: s.action, error: String((e as Error).message).slice(0, 200) }));
+    }
+  }
+}
+
 const json = (res: any, code: number, body: unknown) => {
   res.writeHead(code, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(body));
 };
 
 const server = http.createServer((req, res) => {
+  // === the grid, as a talent ===
+  // A person can run this from a terminal and an agent can call it here; both reach the same
+  // runner, so the manifest below describes something that is already true.
+  if (req.method === 'GET' && req.url === '/grid/status') {
+    const out = runGrid(['--side', 'ask', '--levels', '1']);
+    return json(res, 200, { ok: out.status === 0, steps: out.steps, stderr: out.stderr });
+  }
+
+  if (req.method === 'POST' && req.url === '/grid/run') {
+    const out = runGrid(['--side', 'ask', '--levels', '1', '--execute']);
+    return json(res, 200, { ok: out.status === 0, steps: out.steps, stderr: out.stderr });
+  }
+
+  // Schedules by QUERY rather than by body: three small verbs against one table, and reading a
+  // request body to learn a number is a parser this does not need.
+  if ((req.url ?? '').startsWith('/schedule')) {
+    // Wrapped because a bad URL throws, and a throw inside the request handler is an unanswered
+    // request rather than an error the caller can see.
+    let url: URL;
+    try {
+      url = new URL(`http://local${req.url}`);
+    } catch {
+      return json(res, 400, { error: 'bad request URL' });
+    }
+    if (req.method === 'GET') {
+      return json(res, 200, { schedules: listSchedules() });
+    }
+    if (req.method === 'DELETE') {
+      deleteSchedule(url.searchParams.get('id') ?? '');
+      return json(res, 200, { schedules: listSchedules() });
+    }
+    if (req.method === 'POST') {
+      // A floor of 15 seconds. A schedule that can be set to zero is a loop, and the thing it loops
+      // is a signed transaction.
+      const every = Math.max(Number(url.searchParams.get('every')) || 0, 15);
+      const id = createSchedule('grid.run', { side: 'ask', levels: 1 }, every);
+      return json(res, 200, { created: id, everySeconds: every, schedules: listSchedules() });
+    }
+  }
+
   if (req.method === 'GET' && req.url === '/metadata') {
     // What a publisher would declare in a manifest. Not token-gated and not charged:
     // a description nobody can read is not a description.
@@ -323,8 +421,24 @@ const server = http.createServer((req, res) => {
           directions: Object.keys(DIRECTIONS),
           window: 'fills must be requested before the order expires, which defaults to 60s',
         },
+      }, {
+        id: 'grid.status',
+        title: 'Read the DeepBook guard',
+        description: 'The account an agent may trade: its limits, the book, the funds it holds, and '
+          + 'what a pass would do. Changes nothing and signs nothing.',
+      }, {
+        id: 'grid.run',
+        title: 'Run one grid pass',
+        description: 'Places one ladder level through the guard, signed by whoever holds the seat. '
+          + 'The guard enforces the band, the per-order bound, the budget and the pause, so this '
+          + 'cannot exceed what the maker set.',
       }],
-      routes: { fill: 'POST /fill  { "orderId": "0x…" }' },
+      routes: {
+        fill: 'POST /fill  { "orderId": "0x…" }',
+        'grid.status': 'GET /grid/status',
+        'grid.run': 'POST /grid/run',
+        schedule: 'GET /schedule · POST /schedule?every=60 · DELETE /schedule?id=…',
+      },
     });
   }
 
@@ -353,6 +467,12 @@ const server = http.createServer((req, res) => {
 
   json(res, 404, { error: 'not found' });
 });
+
+// The clock starts with the server, and only here: this process holds the signing key, so a
+// scheduled pass has no new key to find and no new place for one to leak from.
+setInterval(() => {
+  void fireDueSchedules();
+}, 30_000);
 
 server.listen(PORT, HOST, () => {
   console.log(`mcp server on http://${HOST}:${PORT}`);
