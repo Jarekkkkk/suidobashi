@@ -244,6 +244,26 @@ order path takes `&mut Pool`, and whether Sui permits the same shared Pool as a 
 several commands of one PTB is a question about the transaction, not about this module. Needs a dry
 run against the published package. Until then: one transaction per guard.
 
+**Built for (b).** `src/runner.ts` is one operator's decision half: a pure function of a guard's
+state, the book, and what is already resting, checked by 29 assertions in `src/verify-runner.js`.
+Three properties are load-bearing rather than tidy:
+
+- **Idempotent.** A ladder already resting is asked for nowhere. A runner is a loop and a guard's
+  budget counts every order the agent ever asks for, so re-placing its own work would burn the
+  maker's budget on orders that already exist.
+- **Never crossing.** The ladder is capped at the best *bid*, never the ask, so every level is a
+  maker order and none can fill at a price the grid did not choose.
+- **Stands down, never crashes.** A market that has left the band, a guard that is paused, a seat
+  this runner does not hold — each returns a plan with nothing in it and a reason, because the
+  moment a runner must not die is the moment the market moves.
+
+The submission half is not built, for the same reason the order paths are not: it calls the guard
+module, which is not published. Nor is the listing's action. The page itself is built — a
+`strategies` tab in the sidebar, its catalog served from `/api/strategies` — and opting in is
+**absent with the server's reason shown** rather than a button that fails when pressed. The reason
+is served as data (`blocked`), so the day the publish sets `DEEPBOOK_GUARD_PACKAGE` the page starts
+offering the action with no UI change.
+
 ### (c) Programmable — the agent is a Move contract
 
 **Not possible as this plan wrote it, and the plan was wrong.** A Move module can never be

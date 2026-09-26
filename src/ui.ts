@@ -24,9 +24,10 @@ import { spawnSync } from 'node:child_process';
 // One reader of the allowance ledger. It lives in agent.ts because the GATE needs it too —
 // checking it only on chain means the refusal arrives as a MoveAbort with no numbers in it.
 import { allowanceMist } from './agent.js';
-import { VAULT_ID, DEPLOYER, USDC_TYPE, REWARD_TYPE, PACKAGE_LATEST_ID, POOL_TICK_SPACING, GUARD_ID, GUARD_SHARED_VERSION, SLIPPAGE_BPS, COINS, DIRECTIONS, type Direction } from './addresses.js';
+import { VAULT_ID, DEPLOYER, USDC_TYPE, REWARD_TYPE, PACKAGE_LATEST_ID, POOL_TICK_SPACING, GUARD_ID, GUARD_SHARED_VERSION, SLIPPAGE_BPS, COINS, DIRECTIONS, DEEPBOOK_GUARD_PACKAGE, type Direction } from './addresses.js';
 import { HIRES } from './hires.js';
 import { MARKETPLACE, describeTalents, serverForAction, talentFor } from './talents.js';
+import { STRATEGIES } from './strategies.js';
 import { findCreatedGuard, repointAddresses } from './guard-id.js';
 import { event, endingFor, type EventKind } from './web/events.js';
 import {
@@ -1597,6 +1598,22 @@ const server = http.createServer((req, res) => {
 
   if (req.method === 'GET' && req.url === '/api/state') {
     return state().then((s) => send(200, JSON.stringify(s))).catch((e) => send(500, JSON.stringify({ error: errText(e) })));
+  }
+
+  // The listing for flavor (b): what a maker can point a guard at, and whether they can yet.
+  //
+  // Whether the guard module is published is served as DATA rather than hard-coded in the pane.
+  // The moment the publish sets that id, the page starts offering the action with no UI change —
+  // and until then it says why not, so a maker sees an absent button with a reason rather than a
+  // button that fails when pressed.
+  if (req.method === 'GET' && req.url === '/api/strategies') {
+    return send(200, JSON.stringify({
+      strategies: STRATEGIES,
+      guardPackageId: DEEPBOOK_GUARD_PACKAGE,
+      blocked: DEEPBOOK_GUARD_PACKAGE === null
+        ? 'the guard module is not published yet, so there is no guard to point at an operator'
+        : null,
+    }));
   }
 
   if ((req.url ?? '').startsWith('/api/chats')) {

@@ -274,3 +274,13 @@ export const SLIPPAGE_BPS = 100n; // 1%
 
 export const DEPLOYER =
   '0x0b3fc768f8bb3c772321e3e7781cac4a45585b4bc64043686beb634d65341798';
+
+/**
+ * The `deepbook_guard` package, once it is published.
+ *
+ * Null deliberately. A package id that is plausible but wrong is worse than an absent one: the
+ * failure would be an abort on a transaction the maker has already signed. Everything that would
+ * call it reads this first and reports that the module is unpublished rather than guessing at an
+ * address. The publish sets it, the way `guard-id.ts` adopts a deployed guard.
+ */
+export const DEEPBOOK_GUARD_PACKAGE: string | null = null;

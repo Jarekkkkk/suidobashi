@@ -77,6 +77,35 @@ export type SubmitResult = {
 };
 
 /**
+ * The operator listing: what a maker can point a guard at, and whether they can yet.
+ *
+ * A typed mirror of the server's `src/strategies.ts`, which is the same treatment `State` and
+ * `BuildResult` get — the app depends on the API's shape, not on the server's modules.
+ *
+ * `blocked` is the server's reason to offer nothing, and it is data rather than a message the pane
+ * decides on: the same field goes null when the guard module is published, so the page starts
+ * offering the action without a UI change.
+ */
+export type StrategyListing = {
+  strategies: Array<{
+    id: string;
+    name: string;
+    /** The address the operator signs as. Printed in full, because it is meant to be checked. */
+    operator: string;
+    summary: string;
+    bandUsdc: { low: number; high: number };
+    levels: number;
+    perLevelSui: number;
+    budgetSui: number;
+    everySeconds: number;
+    /** What it will not do. The edge a maker is actually deciding about. */
+    willNot: string;
+  }>;
+  guardPackageId: string | null;
+  blocked: string | null;
+};
+
+/**
  * Amount formatting lives in src/web/units.js — the same module the CLI scripts use.
  *
  * It used to live here too, which is how the same fee printed as "0.01" in a refusal and

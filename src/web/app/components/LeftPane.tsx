@@ -9,6 +9,7 @@ import { SourceAvatar } from '@/components/Avatar';
 import { PolicySheet } from '@/components/PolicySheet';
 import { ChatsPane } from '@/components/ChatsPane';
 import { TalentsPane } from '@/components/TalentsPane';
+import { StrategiesPane } from '@/components/StrategiesPane';
 
 /*
  * The left pane: what is installed, and what is left over.
@@ -147,7 +148,7 @@ export function LeftPane({
   onDisconnect,
 }: LeftPaneProps) {
   // Chats first: it is the tab you return to, and the one that says what the app is for.
-  const [tab, setTab] = useState<'chats' | 'talents' | 'notifications'>('chats');
+  const [tab, setTab] = useState<'chats' | 'talents' | 'strategies' | 'notifications'>('chats');
   const [out, setOut] = useState<Outstanding | null>(null);
   const [hires, setHires] = useState<Hire[] | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -306,6 +307,10 @@ export function LeftPane({
       <div className="flex shrink-0 items-center gap-1 border-b border-border px-3 py-2">
         <Tab active={tab === 'chats'} onClick={() => setTab('chats')}>chats</Tab>
         <Tab active={tab === 'talents'} onClick={() => setTab('talents')}>talents</Tab>
+        {/* Strategies sit beside talents because they are the same kind of thing to a maker: a
+            capability on offer, which they decide whether to hand anything. */}
+        <Tab active={tab === 'strategies'} onClick={() => setTab('strategies')}>strategies</Tab>
+        <Tab active={tab === 'strategies'} onClick={() => setTab('strategies')}>strategies</Tab>
         <Tab active={tab === 'notifications'} onClick={() => setTab('notifications')}>
           outstanding
           {outstanding.length > 0 && (
@@ -338,6 +343,15 @@ export function LeftPane({
           <div className="flex h-full flex-col">
             {/* What the model can DO. */}
             <TalentsPane />
+          </div>
+        )}
+
+        {tab === 'strategies' && <StrategiesPane />}
+
+        {tab === 'strategies' && (
+          <div className="flex h-full flex-col">
+            {/* Who could do it, once a guard exists to point at them. */}
+            <StrategiesPane />
           </div>
         )}
 
