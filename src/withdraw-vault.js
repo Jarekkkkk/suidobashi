@@ -30,6 +30,8 @@ import {
   PACKAGE_LATEST_ID, VAULT_ID, OWNER_CAP_ID, SUI_TYPE,
   VAULT_SHARED_VERSION, DEPLOYER,
 } from './addresses.js';
+// For MESSAGES only. The transaction still carries the integer.
+import { mistToSui } from './web/units.js';
 
 const EMIT_BYTES = process.argv.includes('--emit-bytes');
 
@@ -66,7 +68,7 @@ async function main() {
     return;
   }
   if (amount > held) {
-    throw new Error(`cannot withdraw ${amount} — the vault holds ${held}`);
+    throw new Error(`cannot withdraw ${mistToSui(amount)} SUI — the vault holds ${mistToSui(held)}`);
   }
 
   const tx = new Transaction();

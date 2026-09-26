@@ -26,6 +26,8 @@ import {
   VAULT_SHARED_VERSION, POLICY_SHARED_VERSION, CLOCK_SHARED_VERSION,
   POOL_SHARED_VERSION, GLOBAL_CONFIG_SHARED_VERSION, DEPLOYER,
 } from './addresses.js';
+// For MESSAGES only. The transaction still carries the integer.
+import { mistToSui } from './web/units.js';
 
 const EMIT_BYTES = process.argv.includes("--emit-bytes");
 // Amount is overridable so the same script can size the swap to a target.
@@ -63,7 +65,7 @@ async function main() {
   const vaultBal = await client.getBalance({ owner: VAULT_ID, coinType: SUI_TYPE });
   const held = BigInt(vaultBal.balance?.balance ?? 0);
   if (held < AMOUNT_MIST) {
-    throw new Error(`cannot swap ${AMOUNT_MIST} — the vault holds ${held}. `
+    throw new Error(`cannot swap ${mistToSui(AMOUNT_MIST)} SUI — the vault holds ${mistToSui(held)}. `
       + 'Fund the vault first: the swap draws from the vault, not from the wallet.');
   }
 

@@ -25,6 +25,7 @@ import { VAULT_ID, DEPLOYER, USDC_TYPE, REWARD_TYPE, PACKAGE_LATEST_ID, POOL_TIC
 import { HIRES } from './hires.js';
 import { findCreatedGuard, repointAddresses } from './guard-id.js';
 import { event, endingFor } from './web/events.js';
+import { unitsToUsdc } from './web/units.js';
 
 const PORT = Number(process.env.UI_PORT ?? 8788);
 const HOST = process.env.UI_HOST ?? '127.0.0.1';
@@ -525,8 +526,8 @@ function actionFor(kind, body) {
     // for them.
     if (minOut < feeOut) {
       return {
-        error: `the fee (${feeOut} USDC) is larger than what you would receive (${minOut} USDC) —`
-          + ' escrow more SUI, or offer a smaller fee',
+        error: `the fee (${unitsToUsdc(feeOut)} USDC) is larger than what you would receive `
+          + `(${unitsToUsdc(minOut)} USDC) — escrow more SUI, or offer a smaller fee`,
       };
     }
     // A TYPO GUARD, not a security boundary. What protects the maker is their

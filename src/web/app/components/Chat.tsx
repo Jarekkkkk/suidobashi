@@ -1,12 +1,12 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { api, type Event, type BuildResult } from '@/lib/api';
-import { wallet } from '@/lib/wallet';
+import { api, units, type Event, type BuildResult, type SubmitResult } from '@/lib/api';
+import { wallet, short } from '@/lib/wallet';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 
 /*
- * The chat: the core loop.
+ * The chat: the core loop, and the reclaim that follows it.
  *
  * Ported from page.js, and the sequence is the point — it is not an implementation
  * detail. The server PROPOSES and BUILDS; the browser SIGNS; the server SUBMITS. The
@@ -27,10 +27,22 @@ const SOURCE_STYLE: Record<Event['source'], string> = {
   chain: 'text-emerald-300/90',
 };
 
+/**
+ * USDC has 6 decimals, SUI has 9.
+ *
+ * Every amount the server sends is in base units — `10000`, not `0.01` — because that is
+ * what the chain deals in and converting early would lose the exactness. The conversion
+ * belongs here, at the last moment before display, and it is the reason a fee once
+ * rendered as "fee 10000 to the filler": the number was right and the units were not.
+ */
+const usdc = (raw: string | number | undefined) => `${units(raw, 6)} USDC`;
+
 export function Chat({ address }: { address: string | null }) {
   const [text, setText] = useState('');
   const [events, setEvents] = useState<Event[]>([]);
   const [busy, setBusy] = useState(false);
+  // The id of a settled order whose storage is still on chain, waiting for the maker.
+  const [reclaimable, setReclaimable] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
   // Keep the newest line in view. The pipeline narrates as it goes, so the interesting
@@ -41,18 +53,56 @@ export function Chat({ address }: { address: string | null }) {
 
   const say = useCallback((e: Event) => setEvents((prev) => [...prev, e]), []);
 
+  /**
+   * Build, sign, submit — the middle of every flow, extracted because the reclaim needs
+   * it too. Returns the digest, or null if the build was refused (which is not an error:
+   * the gate did its job, and it has already said why in an event).
+   */
+  const signAndSubmit = useCallback(async (
+    kind: string,
+    body: Record<string, unknown>,
+  ): Promise<string | null> => {
+    const built = await api<BuildResult>('/api/build', { kind, ...body });
+    (built.events ?? []).forEach(say);
+    if (built.error || !built.bytes || !built.id) {
+      if (!built.events?.length) {
+        say({
+          kind: 'build',
+          source: 'pipeline',
+          text: built.error ?? built.refused?.validation?.reason ?? 'could not build it',
+          terminal: true,
+        });
+      }
+      return null;
+    }
+
+    const w = wallet();
+    if (!w) {
+      say({ kind: 'wallet', source: 'pipeline', text: 'the wallet has not loaded', terminal: true });
+      return null;
+    }
+    // Signed in the wallet, by the user. The server never sees a key.
+    const signed = await w.sign(built.bytes);
+
+    const out = await api<SubmitResult>('/api/submit', { id: built.id, signature: signed.signature });
+    (out.events ?? []).forEach(say);
+    return out.digest ?? null;
+  }, [say]);
+
+  /** The whole swap: propose, then the escrow, then hand it to the filler. */
   async function send() {
     const request = text.trim();
     if (!request || busy) return;
     setBusy(true);
     setText('');
+    setReclaimable(null);
     say({ kind: 'ask', source: 'pipeline', text: request, terminal: false });
 
     try {
       // 1. PROPOSE — the deterministic gate runs before anything is built.
       //
-      // The decision is UPPERCASE, matching agent.js's own vocabulary. Comparing against a
-      // lowercase spelling silently never matches and the flow stops here — which is how
+      // The decision is UPPERCASE, matching agent.js's own vocabulary. Comparing against
+      // a lowercase spelling silently never matches and the flow stops here — which is how
       // this read before, and why the type below names the exact strings rather than
       // leaving it a bare string.
       const proposed = await api<{ events?: Event[]; decision?: 'PROPOSED' | 'REFUSED' }>(
@@ -61,76 +111,115 @@ export function Chat({ address }: { address: string | null }) {
       (proposed.events ?? []).forEach(say);
       if (proposed.decision !== 'PROPOSED') return;
 
-      // 2. BUILD — bytes, held server-side under an id.
+      // 2-4. BUILD, SIGN, SUBMIT.
       //
       // An ORDER, not a swap. The escrow path is the one the chat uses: a swap would draw
       // from the vault, which is empty and always will be, while an order escrows from the
       // maker's own wallet into something the old package versions cannot reach. The
       // server reads the amount from the agent and derives the floor from a live quote, so
       // the text is all that needs sending.
-      const built = await api<BuildResult>('/api/build', { kind: 'order', text: request });
-      (built.events ?? []).forEach(say);
-      if (built.error || !built.bytes || !built.id) {
-        say({
-          kind: 'build',
-          source: 'pipeline',
-          text: built.error ?? built.refused?.validation?.reason ?? 'could not build it',
-          terminal: true,
-        });
-        return;
-      }
+      const digest = await signAndSubmit('order', { text: request });
+      if (!digest) return;
 
-      // 3. SIGN — in the wallet, by the user. The server never sees a key.
-      const w = wallet();
-      if (!w) {
-        say({ kind: 'wallet', source: 'pipeline', text: 'the wallet has not loaded', terminal: true });
-        return;
-      }
-      const signed = await w.sign(built.bytes);
+      say({
+        kind: 'submitted',
+        source: 'chain',
+        text: `escrowed and submitted — ${digest}`,
+        terminal: false,
+        data: { digest },
+      });
 
-      // 4. SUBMIT — signature paired with those bytes, by id.
-      const out = await api<{ digest?: string; status?: string; output?: string; events?: Event[] }>(
-        '/api/submit', { id: built.id, signature: signed.signature },
-      );
-      (out.events ?? []).forEach(say);
-      if (out.digest) {
+      // 5. FILL — hand the order to the MCP server.
+      //
+      // An order lives a minute, so this is the moment it can be filled. Nobody is
+      // watching for orders on this side: the maker tells the server the order exists,
+      // and the server decides whether the terms are worth taking. "Not filled" is
+      // therefore ROUTINE, not an error — the order expires and anyone may refund it,
+      // which is what the design expects to happen to an unattractive order.
+      say({
+        kind: 'filling',
+        source: 'pipeline',
+        text: 'asking the mcp server to fill it…',
+        terminal: false,
+      });
+      const f = await api<{
+        filled?: boolean; digest?: string; fee?: string; minOut?: string;
+        orderId?: string; why?: string;
+      }>('/api/fill', { digest });
+
+      if (f.filled) {
+        // What the maker KEEPS is the number that matters, and it is the floor rather
+        // than an exact figure: settlement asserts `output - fee >= min_out`, so the
+        // maker received at least this and possibly more. Saying "at least" is the
+        // honest phrasing; the exact amount would need a chain read.
         say({
-          kind: 'submitted',
+          kind: 'filled',
           source: 'chain',
-          text: `${out.status ?? 'submitted'} — ${out.digest}`,
-          terminal: true,
-          data: { digest: out.digest },
-        });
-
-        // 5. FILL — hand the order to the MCP server.
-        //
-        // An order lives a minute, so this is the moment it can be filled. Nobody is
-        // watching for orders on this side: the maker tells the server the order exists,
-        // and the server decides whether the terms are worth taking. "Not filled" is
-        // therefore ROUTINE, not an error — the order expires and anyone may refund it,
-        // which is what the design expects to happen to an unattractive order.
-        say({
-          kind: 'filling',
-          source: 'pipeline',
-          text: 'asking the mcp server to fill it…',
-          terminal: false,
-        });
-        const f = await api<{ filled?: boolean; digest?: string; fee?: string; orderId?: string; why?: string }>(
-          '/api/fill', { digest: out.digest },
-        );
-        say({
-          kind: f.filled ? 'filled' : 'unfilled',
-          source: 'chain',
-          text: f.filled
-            ? `filled — ${f.digest} · fee ${f.fee} to the filler`
-            : `not filled: ${f.why ?? 'no reason given'}. It expires shortly, and anyone may refund it to you.`,
+          text: `filled — ${f.digest} · you received at least ${usdc(f.minOut)} · `
+            + `fee ${usdc(f.fee)} to the filler`,
           terminal: true,
           data: { orderId: f.orderId, digest: f.digest },
         });
+      } else {
+        say({
+          kind: 'unfilled',
+          source: 'chain',
+          text: `not filled: ${f.why ?? 'no reason given'}. It expires shortly, and anyone `
+            + 'may refund it to you.',
+          terminal: true,
+          data: { orderId: f.orderId },
+        });
       }
+
+      // A settled order stays on chain, and its storage rebate goes to whoever signs the
+      // burn — so leaving it alive is what lets the MAKER reclaim it rather than the
+      // server that filled it. That is the whole reason `burn` is maker-gated. Offer it
+      // now, while the id is in hand; the user decides when to spend the signature.
+      if (f.filled && f.orderId) setReclaimable(f.orderId);
     } catch (e) {
       // A rejected signature is routine — the user may simply have declined. It is
       // worded as an ending rather than an error, matching the server's vocabulary.
+      say({
+        kind: 'ended',
+        source: 'pipeline',
+        text: `ended: ${e instanceof Error ? e.message : String(e)}`,
+        terminal: true,
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * Reclaim a settled order's storage.
+   *
+   * This is the step that pays the user rather than costing them: the burn's gas is
+   * ~0.0003 SUI and the rebate is ~0.0044 SUI measured, so it nets about +0.0041. It
+   * needs the MAKER's signature because `order::burn` asserts the caller is the maker —
+   * a stranger cannot take the rebate, and neither can we.
+   */
+  async function reclaim(orderId: string) {
+    if (busy) return;
+    setBusy(true);
+    setReclaimable(null);
+    say({
+      kind: 'reclaiming',
+      source: 'pipeline',
+      text: 'reclaiming the settled order\u2019s storage…',
+      terminal: false,
+    });
+    try {
+      const digest = await signAndSubmit('burn', { orderId });
+      if (digest) {
+        say({
+          kind: 'reclaimed',
+          source: 'chain',
+          text: `reclaimed — ${digest} · about 0.0044 SUI of storage back`,
+          terminal: true,
+          data: { digest, orderId },
+        });
+      }
+    } catch (e) {
       say({
         kind: 'ended',
         source: 'pipeline',
@@ -163,6 +252,19 @@ export function Chat({ address }: { address: string | null }) {
         {busy && <p className="text-sm text-white/40">working…</p>}
         <div ref={endRef} />
       </div>
+
+      {reclaimable && (
+        <div className="flex items-center gap-3 border-t border-white/10 bg-white/[0.02] px-4 py-2">
+          <span className="min-w-0 text-xs text-white/50">
+            order <span className="font-mono">{short(reclaimable)}</span> is settled and its
+            storage is still yours to reclaim.
+          </span>
+          <Button size="sm" variant="outline" className="ml-auto shrink-0"
+            onClick={() => void reclaim(reclaimable)}>
+            reclaim
+          </Button>
+        </div>
+      )}
 
       <div className="flex gap-2 border-t border-white/10 p-3">
         <Input

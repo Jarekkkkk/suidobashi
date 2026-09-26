@@ -5,9 +5,14 @@
  * the storage rebate can be reclaimed by the maker rather than by whoever happened to
  * settle it.
  *
- * Measured on chain: a minimal transaction costs ~0.00024 SUI and an object's storage
- * rebate is ~0.0018 SUI, so the burn nets roughly 0.0018. Small, but it is yours, and
- * it is the reason `burn` is maker-gated rather than open to anyone who notices.
+ * Measured on chain: a minimal transaction costs ~0.0003 SUI and a settled order's
+ * storage rebate is ~0.0044 SUI, so the burn nets roughly +0.0041 — about the cost of a
+ * settlement, which makes reclaiming worth the signature.
+ *
+ * The first version of this note estimated ~0.0018 from comparable objects. The measured
+ * figure is roughly 2.4× that, and docs/ORDER-ESCROW.md records the correction; this
+ * comment had kept the estimate. It is yours, and it is the reason `burn` is maker-gated
+ * rather than open to anyone who notices.
  *
  * Maker-gated: `order::burn` asserts the caller is the order's maker, so a stranger
  * cannot take the rebate.

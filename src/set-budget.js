@@ -23,6 +23,8 @@ import {
   VAULT_SHARED_VERSION, CLOCK_SHARED_VERSION, DEPLOYER,
 } from './addresses.js';
 import { HIRES, DEFAULT_HIRE, HIRE_NAMES } from './hires.js';
+// For MESSAGES only. The transaction still carries the integer.
+import { mistToSui } from './web/units.js';
 
 const EMIT_BYTES = process.argv.includes('--emit-bytes');
 const BUDGET_MIST = BigInt(process.env.BUDGET_MIST ?? '50000000');
@@ -51,7 +53,7 @@ async function main() {
   const held = BigInt(balance.balance?.balance ?? 0);
   if (BUDGET_MIST > held) {
     throw new Error(
-      `budget ${BUDGET_MIST} exceeds what the vault holds (${held}) — the ledger would allow it, the pool would not`,
+      `budget ${mistToSui(BUDGET_MIST)} SUI exceeds what the vault holds (${mistToSui(held)}) — the ledger would allow it, the pool would not`,
     );
   }
 

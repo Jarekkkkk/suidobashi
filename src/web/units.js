@@ -1,10 +1,14 @@
 /*
- * Decimal string -> integer units, for the page's amount inputs.
+ * Amount conversion, both directions, in exact integers.
  *
- * Pure and DOM-free so it can be tested on its own (see src/verify-page.js). This
- * matters more than it looks: this parser is what turns what someone typed into the
- * integer a chain transaction will carry, and it is the piece that silently broke
- * when the page lived inside a template literal. Money arithmetic with no test is
+ * Pure and DOM-free so it can be tested on its own (see src/verify-page.js), and shared
+ * beyond the page: the scripts that talk to a person import the reverse formatter below,
+ * because a message reading "cannot swap 10000000" is a correct number in a unit nobody
+ * reads.
+ *
+ * This matters more than it looks: the forward parser is what turns what someone typed
+ * into the integer a chain transaction will carry, and it is the piece that silently
+ * broke when the page lived inside a template literal. Money arithmetic with no test is
  * how you send the wrong number.
  *
  * No floats anywhere. `Number("0.05") * 1e9` is 50000000.00000001 in binary floating
@@ -43,3 +47,24 @@ export const suiToMist = (text) => toUnits(text, SUI_DECIMALS);
 
 /** USDC as typed by a person -> 6-decimal units. */
 export const usdcToUnits = (text) => toUnits(text, USDC_DECIMALS);
+
+/**
+ * Integer units -> a decimal string. The reverse of `toUnits`, and exact for the same
+ * reason: string slicing, never a division.
+ *
+ * For MESSAGES. A chain amount is always the integer, and anything that carries a value
+ * keeps carrying the integer — this exists so a person reading a refusal sees "0.01"
+ * rather than "10000", which is a number in a unit they do not have in their head.
+ */
+export function fromUnits(raw, decimals) {
+  const s = String(raw ?? '0').replace('-', '').padStart(decimals + 1, '0');
+  const whole = s.slice(0, -decimals);
+  const frac = s.slice(-decimals).replace(/0+$/, '');
+  return frac ? `${whole}.${frac}` : whole;
+}
+
+/** MIST -> a decimal string, for messages. */
+export const mistToSui = (raw) => fromUnits(raw, SUI_DECIMALS);
+
+/** 6-decimal USDC units -> a decimal string, for messages. */
+export const unitsToUsdc = (raw) => fromUnits(raw, USDC_DECIMALS);
