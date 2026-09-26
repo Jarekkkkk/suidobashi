@@ -23,13 +23,12 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { VAULT_ID, DEPLOYER, USDC_TYPE, REWARD_TYPE, PACKAGE_LATEST_ID, POOL_TICK_SPACING, GUARD_ID, GUARD_SHARED_VERSION, SLIPPAGE_BPS } from './addresses.js';
 import { HIRES } from './hires.js';
-import { MARKETPLACE, KNOWN_SERVICES, describeTalents, talentFor } from './talents.js';
+import { MARKETPLACE, describeTalents, talentFor } from './talents.js';
 import { findCreatedGuard, repointAddresses } from './guard-id.js';
 import { event, endingFor, type EventKind } from './web/events.js';
 import {
   listChats, createChat, getChat, renameChat, deleteChat, messages, append,
   listTalents, installTalent, uninstallTalent, dbPath,
-  listServices, registerService, unregisterService,
 } from './db.js';
 import { unitsToUsdc } from './web/units.js';
 
@@ -1529,11 +1528,12 @@ const server = http.createServer((req, res) => {
       // THE MARKETPLACE AND WHAT IS INSTALLED, as two lists. The tab shows the first as things
       // you can add and marks the ones already in the second — which is what a marketplace is,
       // and why nobody types a URL any more.
-      const installedIds = listTalents().map((t) => t.id);
       return send(200, JSON.stringify({
         marketplace: MARKETPLACE,
-        installedIds,
-        talents: listTalents(),
+        installedIds: listTalents().map((t) => t.id),
+        // The stored manifest is the SERVER's side — what it can do. Shown beside the
+        // talent's own actions so the two halves of the protocol are visible as two.
+        installed: listTalents(),
       }));
     }
 
@@ -1556,16 +1556,11 @@ const server = http.createServer((req, res) => {
           return send(400, JSON.stringify({ error: 'bad body' }));
         }
 
-        // A LOCAL TALENT IS INSTALLED DIRECTLY. There is nothing to fetch: the app performs it
-        // itself, and the entry in the marketplace already says what it can do. Fetching a URL
-        // would be asking a server about a capability that lives here.
+        // The marketplace entry names the server, so the address is never typed. The name comes
+        // from the entry too: a talent is how the agent reaches a server, and the client's half
+        // of the protocol is ours to declare rather than the server's to announce.
         const listed = talentFor(wanted);
-        if (listed && listed.kind === 'local') {
-          installTalent(listed.id, listed.name, listed, null);
-          return send(200, JSON.stringify({ ok: true, id: listed.id, name: listed.name }));
-        }
-
-        const url = wanted.replace(/\/+$/, '');
+        const url = (listed?.server ?? wanted).replace(/\/+$/, '');
         if (!/^https?:\/\/[^\s]+$/.test(url)) {
           return send(400, JSON.stringify({
             error: 'not in the marketplace, and not an http(s) address either',
@@ -1583,7 +1578,7 @@ const server = http.createServer((req, res) => {
           // The name comes from the manifest, so a talent says what it is rather than being
           // labelled by whoever installed it. The URL is the id: it is unique, and it is what
           // the server would have to reach anyway.
-          const name = String(manifest?.strategy?.id || manifest?.name || url);
+          const name = listed?.name || String(manifest?.strategy?.id || url);
           installTalent(url, name, manifest, null);
           return send(200, JSON.stringify({ ok: true, id: url, name }));
         } catch (e) {
@@ -1599,44 +1594,6 @@ const server = http.createServer((req, res) => {
 
     if (req.method === 'DELETE' && id) {
       uninstallTalent(decodeURIComponent(id));
-      return send(200, JSON.stringify({ ok: true }));
-    }
-  }
-
-  if ((req.url ?? '').startsWith('/api/services')) {
-    const parts = (req.url ?? '').split('?')[0].split('/').filter(Boolean);
-    const id = parts[2];
-
-    if (req.method === 'GET' && !id) {
-      // BOTH LISTS. `known` is what the app ships as registerable; `registered` is what has been
-      // registered by hand. A service exists on-chain and the connector follows — not the other
-      // way round — so registering is deliberate rather than discovered.
-      return send(200, JSON.stringify({
-        known: KNOWN_SERVICES,
-        registered: listServices(),
-      }));
-    }
-    if (req.method === 'POST' && !id) {
-      let raw = '';
-      req.on('data', (c) => { raw += c; if (raw.length > 8192) req.destroy(); });
-      req.on('end', () => {
-        let wanted = '';
-        try {
-          ({ id: wanted } = JSON.parse(raw || '{}'));
-        } catch {
-          return send(400, JSON.stringify({ error: 'bad body' }));
-        }
-        const known = KNOWN_SERVICES.find((s) => s.id === wanted);
-        if (!known) {
-          return send(400, JSON.stringify({ error: 'not a known service' }));
-        }
-        registerService(known.id, known.name, known.role, known.url);
-        return send(200, JSON.stringify({ ok: true, id: known.id, name: known.name }));
-      });
-      return;
-    }
-    if (req.method === 'DELETE' && id) {
-      unregisterService(decodeURIComponent(id));
       return send(200, JSON.stringify({ ok: true }));
     }
   }
@@ -1682,13 +1639,9 @@ const server = http.createServer((req, res) => {
           // than by both being written correctly.
           const installed = listTalents();
           const { text: capabilities } = describeTalents(installed.map((t) => t.id));
-          const registered = listServices();
           const text = [
             capabilities ? 'I can do these:' : 'Nothing is installed yet — add a talent first.',
             capabilities,
-            registered.length
-              ? `\nOrders are filled by: ${registered.map((x) => x.name).join(', ')}.`
-              : '',
           ].filter(Boolean).join('\n');
           return send(200, JSON.stringify({
             decision: 'ANSWERED',
