@@ -415,3 +415,106 @@ fun the_maker_can_reclaim_a_settled_order() {
     order::burn(o, s.ctx());
     s.end();
 }
+
+// === the fee ===
+//
+// What the maker pays for a fill, in the OUTPUT coin's units. The floor is what the
+// maker RECEIVES, so the fee sits ON TOP of it — and that boundary is where an
+// off-by-one would hide, which is why the arithmetic is tested directly rather than
+// only through a swap the unit VM cannot build.
+
+#[test]
+fun an_order_without_a_fee_pays_nothing() {
+    let mut s = ts::begin(MAKER);
+    share_clock(&mut s, NOW_MS);
+
+    s.next_tx(MAKER);
+    let clk = ts::take_shared<Clock>(&s);
+    let order_id = order::create<OrderTestCoin>(
+        coin::mint_for_testing<OrderTestCoin>(1_000, s.ctx()),
+        pool_a(), 900, LATER_MS, MAKER, &clk, s.ctx(),
+    );
+    ts::return_shared(clk);
+
+    s.next_tx(MAKER);
+    {
+        let o = ts::take_shared_by_id<order::Order<OrderTestCoin>>(&s, order_id);
+        assert_eq!(order::fee(&o), 0);
+        ts::return_shared(o);
+    };
+    s.end();
+}
+
+#[test]
+fun create_with_fee_records_it() {
+    let mut s = ts::begin(MAKER);
+    share_clock(&mut s, NOW_MS);
+
+    s.next_tx(MAKER);
+    let clk = ts::take_shared<Clock>(&s);
+    let order_id = order::create_with_fee<OrderTestCoin>(
+        coin::mint_for_testing<OrderTestCoin>(1_000, s.ctx()),
+        pool_a(), 900, 250, LATER_MS, MAKER, &clk, s.ctx(),
+    );
+    ts::return_shared(clk);
+
+    s.next_tx(MAKER);
+    {
+        let o = ts::take_shared_by_id<order::Order<OrderTestCoin>>(&s, order_id);
+        assert_eq!(order::fee(&o), 250);
+        // and the terms are otherwise the same as `create` would have set
+        assert_eq!(order::amount_in(&o), 1_000);
+        assert_eq!(order::min_out(&o), 900);
+        ts::return_shared(o);
+    };
+    s.end();
+}
+
+/// Zero means absent, so "no fee" has one representation rather than two.
+#[test]
+fun a_zero_fee_is_stored_as_absent() {
+    let mut s = ts::begin(MAKER);
+    share_clock(&mut s, NOW_MS);
+
+    s.next_tx(MAKER);
+    let clk = ts::take_shared<Clock>(&s);
+    let order_id = order::create_with_fee<OrderTestCoin>(
+        coin::mint_for_testing<OrderTestCoin>(1_000, s.ctx()),
+        pool_a(), 900, 0, LATER_MS, MAKER, &clk, s.ctx(),
+    );
+    ts::return_shared(clk);
+
+    s.next_tx(MAKER);
+    {
+        let o = ts::take_shared_by_id<order::Order<OrderTestCoin>>(&s, order_id);
+        assert_eq!(order::fee(&o), 0);
+        ts::return_shared(o);
+    };
+    s.end();
+}
+
+/// The exact boundary: output 1000, fee 100, floor 900 — the maker receives precisely
+/// 900, which satisfies the floor. One unit less and it must refuse.
+#[test]
+fun a_fill_covering_floor_and_fee_exactly_passes() {
+    order::assert_pays_out_for_testing(1_000, 100, 900);
+}
+
+#[test]
+#[expected_failure(abort_code = order::EBelowMinimum)]
+fun a_fill_one_unit_short_of_floor_plus_fee_aborts() {
+    order::assert_pays_out_for_testing(1_000, 100, 901);
+}
+
+/// The fee is on TOP of the floor, not inside it — so a fee that would eat the whole
+/// output is a malformed order, and says so rather than aborting in a subtraction.
+#[test]
+#[expected_failure(abort_code = order::EFeeAboveOutput)]
+fun a_fee_equal_to_the_output_aborts() {
+    order::assert_pays_out_for_testing(100, 100, 1);
+}
+
+#[test]
+fun no_fee_means_the_floor_equals_the_output() {
+    order::assert_pays_out_for_testing(1_000, 0, 1_000);
+}

@@ -46,6 +46,15 @@ const EAlreadySettled: vector<u8> = "order has already been settled";
 const ENotSettled: vector<u8> = "order has not been settled";
 #[error]
 const ENotMaker: vector<u8> = "only the maker may reclaim this order's storage";
+#[error]
+const EFeeAboveOutput: vector<u8> = "the fee is larger than the output";
+
+/// Dynamic-field key holding the fee a maker will pay for a fill, in the OUTPUT
+/// coin's units.
+///
+/// A dynamic field because `Order` is published and its layout is frozen. The fee
+/// could not be a struct field for the same reason `SettledKey` is not.
+public struct FeeKey has copy, drop, store {}
 
 /// Dynamic-field key marking an order as filled.
 ///
@@ -135,6 +144,53 @@ public fun create<CoinType>(
     clock: &Clock,
     ctx: &mut TxContext,
 ): ID {
+    let (order, order_id) = build(coin, pool_id, min_out, expires_at_ms, destination, clock, ctx);
+    transfer::share_object(order);
+    order_id
+}
+
+/// Escrow against a minimum AND a fee you will pay for a fill.
+///
+/// A separate entry point rather than a change to `create`, because `create` is
+/// published and a compatible upgrade cannot change an existing signature.
+///
+/// The fee is in the OUTPUT coin's units — what the swap produces — so the maker pays
+/// out of the proceeds rather than needing a second balance. And `min_out` stays a
+/// floor on what the MAKER RECEIVES, so settlement asserts `output - fee >= min_out`
+/// rather than `output >= min_out`. The fee is on top of the floor, not inside it.
+///
+/// Whoever fills the order collects the fee. That is why no recipient is declared: the
+/// maker is buying a fill, and is indifferent to who provides it. It also means a
+/// short window becomes a race the fee rewards, which is the point of a watcher.
+public fun create_with_fee<CoinType>(
+    coin: Coin<CoinType>,
+    pool_id: ID,
+    min_out: u64,
+    fee_out: u64,
+    expires_at_ms: u64,
+    destination: address,
+    clock: &Clock,
+    ctx: &mut TxContext,
+): ID {
+    let (mut order, order_id) = build(coin, pool_id, min_out, expires_at_ms, destination, clock, ctx);
+    // A zero fee means no fee, and is stored as absence rather than as `some(0)` — so
+    // "no fee" has exactly one representation to reason about.
+    if (fee_out > 0) dynamic_field::add(&mut order.id, FeeKey {}, fee_out);
+    transfer::share_object(order);
+    order_id
+}
+
+/// Validate and construct an order. Shared by both entry points, so their validation
+/// cannot drift apart — which it would if `create_with_fee` were a copy.
+fun build<CoinType>(
+    coin: Coin<CoinType>,
+    pool_id: ID,
+    min_out: u64,
+    expires_at_ms: u64,
+    destination: address,
+    clock: &Clock,
+    ctx: &mut TxContext,
+): (Order<CoinType>, ID) {
     let amount_in = coin.value();
     assert!(amount_in > 0, EZeroAmount);
     // A zero floor is not a commitment; it would let a settler deliver nothing.
@@ -154,11 +210,12 @@ public fun create<CoinType>(
     };
     let order_id = object::id(&order);
 
+    // The fee is deliberately NOT in this event: `OrderCreated` is published, so its
+    // layout is frozen and it cannot gain a field. The fee is readable from the object.
     event::emit(OrderCreated {
         order_id, maker, destination, pool_id, amount_in, min_out, expires_at_ms,
     });
-    transfer::share_object(order);
-    order_id
+    (order, order_id)
 }
 
 /// Reclaim after expiry. Anyone may trigger it, and the funds always go to the maker.
@@ -166,8 +223,7 @@ public fun create<CoinType>(
 /// Permissionless on purpose: an order nobody settles must not be able to sit with
 /// dead funds just because the maker went quiet. Since the destination is the maker
 /// and not the caller, a stranger triggering it can only help.
-public fun refund<CoinType>(order: Order<CoinType>, clock: &Clock, ctx: &mut TxContext) {
-    let Order<CoinType> {
+public fun refund<CoinType>(order: Order<CoinType>, clock: &Clock, ctx: &mut TxContext) {    let Order<CoinType> {
         id, maker, destination: _, funds, pool_id: _, min_out: _, expires_at_ms,
     } = order;
     assert!(clock.timestamp_ms() >= expires_at_ms, ENotExpired);
@@ -220,12 +276,19 @@ public fun settle_a2b<A, B>(
         funds, config, pool, amount_in, sqrt_price_limit, clock,
     );
     let amount_out = output.value();
-    assert!(amount_out >= min_out, EBelowMinimum);
+    let fee = fee_out(&order);
+    assert_pays_out(amount_out, fee, min_out);
 
-    // Both sides to the maker's destination: the output, and any input the pool did
-    // not consume. Nothing is left in this module.
-    transfer::public_transfer(coin::from_balance(remainder, ctx), destination);
+    // The fee to whoever filled it, then the rest and any unconsumed input to the
+    // maker. Nothing is left in this module.
+    let mut output = output;
+    let settler = ctx.sender();
+    if (fee > 0) {
+        let tip = output.split(fee);
+        transfer::public_transfer(coin::from_balance(tip, ctx), settler);
+    };
     transfer::public_transfer(coin::from_balance(output, ctx), destination);
+    transfer::public_transfer(coin::from_balance(remainder, ctx), destination);
 
     // Marked and re-shared. The balance is already zero, so a settled order holds
     // nothing even if someone reaches it again.
@@ -233,7 +296,7 @@ public fun settle_a2b<A, B>(
     transfer::share_object(order);
 
     event::emit(OrderSettled {
-        order_id, maker, settler: ctx.sender(), pool_id: object::id(pool), amount_in, amount_out, min_out, destination,
+        order_id, maker, settler, pool_id: object::id(pool), amount_in, amount_out, min_out, destination,
     });
 }
 
@@ -262,16 +325,23 @@ public fun settle_b2a<A, B>(
         funds, config, pool, amount_in, sqrt_price_limit, clock,
     );
     let amount_out = output.value();
-    assert!(amount_out >= min_out, EBelowMinimum);
+    let fee = fee_out(&order);
+    assert_pays_out(amount_out, fee, min_out);
 
-    transfer::public_transfer(coin::from_balance(remainder, ctx), destination);
+    let mut output = output;
+    let settler = ctx.sender();
+    if (fee > 0) {
+        let tip = output.split(fee);
+        transfer::public_transfer(coin::from_balance(tip, ctx), settler);
+    };
     transfer::public_transfer(coin::from_balance(output, ctx), destination);
+    transfer::public_transfer(coin::from_balance(remainder, ctx), destination);
 
     dynamic_field::add(&mut order.id, SettledKey {}, true);
     transfer::share_object(order);
 
     event::emit(OrderSettled {
-        order_id, maker, settler: ctx.sender(), pool_id: object::id(pool), amount_in, amount_out, min_out, destination,
+        order_id, maker, settler, pool_id: object::id(pool), amount_in, amount_out, min_out, destination,
     });
 }
 
@@ -323,10 +393,44 @@ public fun mark_settled_for_testing<CoinType>(order: &mut Order<CoinType>) {
     balance::destroy_for_testing(order.funds.split(amount));
 }
 
+/// The economic check, separated from the swap for the same reason `assert_settleable`
+/// is: the unit VM cannot build a Cetus pool, so anything that needs one is untestable
+/// — and this is arithmetic, which is exactly the part that can be wrong.
+///
+/// Two assertions rather than one, because they mean different things. A fee larger
+/// than the output is a broken order; an output that does not cover floor + fee is an
+/// unprofitable fill. Reporting the first as the second would send a settler looking
+/// at the market when the order itself is malformed.
+fun assert_pays_out(amount_out: u64, fee: u64, min_out: u64) {
+    assert!(fee < amount_out, EFeeAboveOutput);
+    // The floor is what the MAKER RECEIVES, so the fee comes off the top rather than
+    // out of the floor. A maker asking for 5 USDC receives 5 USDC, and the fee is on
+    // top of that.
+    assert!(amount_out - fee >= min_out, EBelowMinimum);
+}
+
+#[test_only]
+public fun assert_pays_out_for_testing(amount_out: u64, fee: u64, min_out: u64) {
+    assert_pays_out(amount_out, fee, min_out)
+}
+
 /// Whether the order has been filled. Read through a dynamic field, because the
 /// struct layout is frozen and a `settled` field is not available.
 fun is_settled<CoinType>(order: &Order<CoinType>): bool {
     dynamic_field::exists(&order.id, SettledKey {})
+}
+
+/// The fee this order pays for a fill, in the output coin's units.
+///
+/// Absent means zero. `create_with_fee` stores nothing rather than `some(0)`, so "no
+/// fee" has exactly one representation and old orders — created before fees existed —
+/// behave identically to new ones created with a zero fee.
+fun fee_out<CoinType>(order: &Order<CoinType>): u64 {
+    if (dynamic_field::exists(&order.id, FeeKey {})) {
+        *dynamic_field::borrow<FeeKey, u64>(&order.id, FeeKey {})
+    } else {
+        0
+    }
 }
 
 /// Reclaim the storage of a settled order. Maker-gated.
@@ -371,3 +475,7 @@ public fun expires_at_ms<CoinType>(order: &Order<CoinType>): u64 { order.expires
 /// Whether this order has already been filled. Exposed because the order survives
 /// settlement now, so "has it been used" is a question callers need to ask.
 public fun settled<CoinType>(order: &Order<CoinType>): bool { is_settled(order) }
+
+/// What this order pays whoever fills it, in the output coin's units. Zero when no
+/// fee was declared.
+public fun fee<CoinType>(order: &Order<CoinType>): u64 { fee_out(order) }
