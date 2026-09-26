@@ -925,7 +925,7 @@ const server = http.createServer((req, res) => {
                 || (doc && doc.decision) || 'could not parse a proposal',
             })),
         ];
-        return send(200, JSON.stringify({ ...r, events }));
+        return send(200, JSON.stringify({ ...r, decision: doc?.decision, events }));
       }
 
       // /api/build: returns bytes to sign, or a refusal with its reason.

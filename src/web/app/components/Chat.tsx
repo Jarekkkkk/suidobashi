@@ -50,11 +50,16 @@ export function Chat({ address }: { address: string | null }) {
 
     try {
       // 1. PROPOSE — the deterministic gate runs before anything is built.
-      const proposed = await api<{ events?: Event[]; decision?: string }>(
+      //
+      // The decision is UPPERCASE, matching agent.js's own vocabulary. Comparing against a
+      // lowercase spelling silently never matches and the flow stops here — which is how
+      // this read before, and why the type below names the exact strings rather than
+      // leaving it a bare string.
+      const proposed = await api<{ events?: Event[]; decision?: 'PROPOSED' | 'REFUSED' }>(
         '/api/propose', { text: request },
       );
       (proposed.events ?? []).forEach(say);
-      if (proposed.decision !== 'proposed') return;
+      if (proposed.decision !== 'PROPOSED') return;
 
       // 2. BUILD — bytes, held server-side under an id.
       const built = await api<BuildResult>('/api/build', { kind: 'swap', text: request });
