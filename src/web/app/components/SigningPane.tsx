@@ -79,9 +79,14 @@ export function SigningPane({
   events: Event[];
   terms: Record<string, unknown> | null;
 }) {
-  // The furthest step reached, not the latest event's step: the reclaim reports under
+  // A TERMINAL event means the flow is OVER, so every step reads as done rather than the
+  // indicator still pointing at the last one. "fill · now" after a completed reclaim says
+  // the flow is waiting on something it is not.
+  const finished = events.length > 0 && events[events.length - 1]?.terminal === true;
+
+  // Otherwise the furthest step reached, not the latest event's: the reclaim reports under
   // `fill`, and a step indicator that walked backwards would read as a failure.
-  const reached = events.reduce((best, e) => {
+  const reached = finished ? STEPS.length : events.reduce((best, e) => {
     const step = STEP_OF[e.kind];
     if (!step) return best;
     return Math.max(best, STEPS.indexOf(step));

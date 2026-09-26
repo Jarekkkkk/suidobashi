@@ -565,6 +565,26 @@ function actionFor(kind, body) {
       },
     };
   }
+  if (kind === 'revoke' || kind === 'refund') {
+    // Revoking an expired order: taking back your own escrow, which is why "refund" was the
+    // wrong name for it. It read as paying someone out.
+    //
+    // Permissionless on chain — anyone may call it, and the funds ALWAYS go to the maker — so
+    // this is not gated to the maker. Maker-only was considered and rejected: it would mean a
+    // lost key loses the money permanently, and ENotExpired already prevents anyone pulling an
+    // order out from under a live fill.
+    //
+    // Both names accepted so an older caller does not silently stop working.
+    const orderId = String(body.orderId || '').trim().toLowerCase();
+    if (!/^0x[0-9a-f]{64}$/.test(orderId)) {
+      return { error: 'orderId must be a full 0x object id (64 hex characters)' };
+    }
+    return {
+      script: 'node src/refund-order.js',
+      env: { ORDER_ID: orderId },
+      proposal: { action: 'revoke an expired order', orderId },
+    };
+  }
   if (kind === 'burn') {
     // Step 3: reclaim the storage of a settled order. Maker-gated on chain, so a
     // stranger cannot take the rebate — but the id is checked here too, because a
@@ -674,6 +694,105 @@ function explainAbort(message) {
       + 'open, fund, rebalance, exit.';
   }
   return m.slice(-400);
+}
+
+/**
+ * How far back the outstanding scan looks. A BOUND, not a preference: each transaction in the
+ * window costs one chain read, so this is the knob that decides whether the tab answers in two
+ * seconds or twenty. Raise it when the history is longer than the window, and consider the
+ * cost rather than assuming it is free.
+ */
+const SCAN = Number(process.env.OUTSTANDING_SCAN ?? '15');
+
+/**
+ * Every order the maker has left in a state that needs acting on.
+ *
+ * Discovery works because `listTransactions` HONOURS its filter and validates it — unlike
+ * `listEvents`, which silently ignores every shape. This project spent a long time believing
+ * a watcher was impossible on the strength of the wrong method.
+ *
+ * Two shapes are outstanding, and they need different actions:
+ *
+ *   funds != 0        LIVE — unfilled. Revocable once expired; a refund before then aborts
+ *                     with ENotExpired, which is the guard stopping a maker racing their own
+ *                     order.
+ *   funds == 0        SETTLED — unburned. The storage rebate is the maker's to reclaim, and
+ *                     burn is maker-gated so nobody else can take it.
+ *
+ * An order that was already burned is gone from the chain and simply does not appear.
+ *
+ * IT IS A SNAPSHOT, NOT A LIVE FEED. Bounded at SCAN transactions, and the caller is told
+ * when it was taken so the UI can say so rather than implying it is current.
+ */
+async function outstandingOrders() {
+  const { SuiGrpcClient } = await import('@mysten/sui/grpc');
+  const client = new SuiGrpcClient({
+    network: 'mainnet',
+    baseUrl: 'https://fullnode.mainnet.sui.io:443',
+  });
+  const maker = process.env.SUI_SENDER || DEPLOYER;
+
+  const list = await client.listTransactions({ filter: { sender: maker }, limit: SCAN });
+  const digests = (list.transactions ?? []).map((t) => (t.Transaction ?? t).digest).filter(Boolean);
+
+  // The created ids from each transaction. Sequential rather than parallel: this is a chain
+  // read per transaction and a burst of them is how a public node starts rate-limiting.
+  const ids = new Set();
+  for (const digest of digests) {
+    try {
+      const r = await client.getTransaction({ digest, include: { effects: true } });
+      const t = r.Transaction ?? r.FailedTransaction ?? r;
+      for (const ch of t.effects?.changedObjects ?? []) {
+        if (ch.idOperation === 'Created') ids.add(ch.objectId);
+      }
+    } catch { /* a transaction we cannot read contributes nothing */ }
+  }
+  if (ids.size === 0) {
+    return { orders: [], scanned: digests.length, candidates: 0, orderObjects: 0, at: Date.now() };
+  }
+
+  // ONE batched read for every candidate, rather than one each. The type check happens here
+  // because a create also mints other objects — the coin, for instance — and `order::Order`
+  // is what distinguishes them.
+  const got = await client.getObjects({ objectIds: [...ids], include: { json: true } });
+  const rows = got.objects ?? got.data ?? [];
+
+  const orders = [];
+  let orderObjects = 0;
+  for (const row of rows) {
+    const o = row.object ?? row;
+    const type = String(o.type ?? '');
+    if (!type.includes('::order::Order<')) continue;
+    orderObjects++;
+    const j = o.json ?? {};
+    const funds = BigInt(String(j.funds ?? '0'));
+    orders.push({
+      orderId: o.objectId,
+      maker: j.maker ?? null,
+      destination: j.destination ?? null,
+      minOut: String(j.min_out ?? '0'),
+      expiresAtMs: String(j.expires_at_ms ?? '0'),
+      pool: j.pool_id ?? null,
+      state: funds === 0n ? 'settled' : 'live',
+      /** What to do about it, so the UI never has to infer it from the state name. */
+      action: funds === 0n ? 'burn' : 'revoke',
+      expired: BigInt(j.expires_at_ms ?? '0') < BigInt(Date.now()),
+    });
+  }
+
+  // THE COUNTERS ARE THE POINT, not decoration. An empty `orders` is indistinguishable from a
+  // broken scan — the mistake this project has already made twice, with listEvents and with a
+  // build artefact. `candidates` says the creates were found and read; `orderObjects` says how
+  // many were still on chain. A scan reporting 0 candidates is BROKEN; one reporting candidates
+  // and 0 order objects has simply found nothing left to do, because burned orders are gone.
+  return {
+    orders,
+    scanned: digests.length,
+    candidates: ids.size,
+    orderObjects,
+    at: Date.now(),
+    maker,
+  };
 }
 
 /**
@@ -1005,6 +1124,12 @@ const server = http.createServer((req, res) => {
 
   if (req.method === 'GET' && req.url === '/api/state') {
     return state().then((s) => send(200, JSON.stringify(s))).catch((e) => send(500, JSON.stringify({ error: e.message })));
+  }
+
+  if (req.method === 'GET' && req.url === '/api/outstanding') {
+    return outstandingOrders()
+      .then((o) => send(200, JSON.stringify(o)))
+      .catch((e) => send(500, JSON.stringify({ error: e.message })));
   }
 
   if (req.method === 'GET' && req.url === '/api/hires') {
