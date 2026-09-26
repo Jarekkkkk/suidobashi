@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { api, units, type Event, type BuildResult, type SubmitResult } from '@/lib/api';
-import { wallet, short } from '@/lib/wallet';
+import { wallet } from '@/lib/wallet';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -44,6 +44,11 @@ export function Chat({ address }: { address: string | null }) {
   // The id of a settled order whose storage is still on chain, waiting for the maker.
   const [reclaimable, setReclaimable] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+
+  // A full object id, which is what `burn` resolves against. Checked here so the button
+  // is not offered for something that cannot work, and so the server's refusal is not the
+  // first thing the user learns.
+  const reclaimIdValid = /^0x[0-9a-f]{64}$/.test(reclaimable ?? '');
 
   // Keep the newest line in view. The pipeline narrates as it goes, so the interesting
   // part is always at the bottom.
@@ -254,15 +259,26 @@ export function Chat({ address }: { address: string | null }) {
       </div>
 
       {reclaimable && (
-        <div className="flex items-center gap-3 border-t border-white/10 bg-white/[0.02] px-4 py-2">
-          <span className="min-w-0 text-xs text-white/50">
-            order <span className="font-mono">{short(reclaimable)}</span> is settled and its
-            storage is still yours to reclaim.
-          </span>
-          <Button size="sm" variant="outline" className="ml-auto shrink-0"
-            onClick={() => void reclaim(reclaimable)}>
-            reclaim
-          </Button>
+        <div className="border-t border-white/10 bg-white/[0.02] px-4 py-2">
+          <div className="flex items-center gap-2">
+            <span className="shrink-0 text-xs text-white/40">reclaim a settled order</span>
+            <Input
+              value={reclaimable}
+              onChange={(e) => setReclaimable(e.target.value)}
+              placeholder="0x… the settled order's object id"
+              className="h-7 font-mono text-xs"
+              disabled={busy}
+            />
+            <Button size="sm" variant="outline" className="shrink-0"
+              disabled={busy || !reclaimIdValid}
+              onClick={() => void reclaim(reclaimable)}>
+              reclaim
+            </Button>
+          </div>
+          <p className="mt-1 text-[11px] leading-snug text-white/35">
+            A settled order stays on chain, and its storage rebate goes to whoever signs
+            the burn — which is why only the maker can. Net about +0.0041 SUI.
+          </p>
         </div>
       )}
 
