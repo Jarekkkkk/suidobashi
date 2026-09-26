@@ -92,7 +92,12 @@ function buildAppBundle() {
   }
 
   try {
-    const built = { js: fs.readFileSync(jsPath, 'utf-8'), css: fs.readFileSync(cssPath, 'utf-8') };
+    // The font faces come out of the package referencing ./files/*.woff2, relative to the
+    // stylesheet. Nothing serves that path, so the font would silently never load — a failure
+    // that looks like "the font just didn't apply" rather than like a 404. Rewritten to a route
+    // the server actually answers.
+    const css = fs.readFileSync(cssPath, 'utf-8').replace(/\.\/files\//g, '/fonts/');
+    const built = { js: fs.readFileSync(jsPath, 'utf-8'), css };
     fs.unlinkSync(jsPath);
     fs.unlinkSync(cssPath);
     return built;
@@ -1357,6 +1362,20 @@ const server = http.createServer((req, res) => {
         'text/javascript; charset=utf-8');
     } catch (e) {
       return send(500, `src/web/${name} unreadable: ${errText(e)}`, 'text/plain; charset=utf-8');
+    }
+  }
+
+  if (req.method === 'GET' && (req.url ?? '').startsWith('/fonts/')) {
+    // Only ever a font file, named from a fixed set. `basename` is what keeps a crafted path
+    // from walking out of the package directory.
+    const name = path.basename((req.url ?? '').split('?')[0]);
+    if (!/^[a-z0-9-]+\.woff2$/.test(name)) return send(404, 'not found', 'text/plain; charset=utf-8');
+    try {
+      const file = fs.readFileSync(
+        path.join('node_modules/@fontsource-variable/inter/files', name));
+      return send(200, file, 'font/woff2');
+    } catch {
+      return send(404, 'no such font', 'text/plain; charset=utf-8');
     }
   }
 

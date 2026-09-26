@@ -1,40 +1,223 @@
-/* Tailwind, CSS-first. v4 needs no config file — the theme lives here. */
+/*
+ * The design tokens.
+ *
+ * Adapted from the Bloks design system (github.com/hamedgitty/bloks), which is shadcn
+ * new-york on a zinc base with CSS variables. What was worth taking is not the colours but the
+ * STRUCTURE — semantic names, one place to change them, and a scale for everything that has
+ * one. The previous version of this file had a hand-rolled oklch palette and nothing else,
+ * which is why the app read as three flat boxes: no `--sidebar`, no `--card`, no `--brand`,
+ * and every other colour chosen inline per component.
+ *
+ * WHY SEMANTIC NAMES AND NOT COLOUR NAMES: `--card` can be retuned once and every card
+ * follows. `bg-white/5` cannot — it is a decision, repeated in twenty files, that nobody can
+ * change without finding all twenty.
+ *
+ * DARK ONLY, for now. The `.dark` class is kept as the switch rather than assumed, so a light
+ * palette is a second block rather than a rewrite.
+ */
+
+/* Self-hosted rather than fetched: this app runs on loopback and should not depend on a
+   CDN to render correctly. Imported HERE rather than from JS — a CSS-carrying package
+   imported from the entry point makes bun emit a second module called app.js, which
+   collides with the bundle output. */
+@import "@fontsource-variable/inter";
 
 @import "tailwindcss";
 
-/*
- * Where the classes come from, stated rather than left to auto-detection. Auto-detection
- * found the TSX fine; being explicit means adding a component directory later is a
- * deliberate edit rather than something that silently works or does not.
- *
- * Note that the @theme colours below do not appear in the output until something uses
- * them — Tailwind tree-shakes unused theme variables. Their absence is not a build
- * failure, and that is worth knowing before concluding the CSS is broken.
- */
-@source ".";
+@custom-variant dark (&:where(.dark, .dark *));
 
-/*
- * The palette is dark-first because the app is a trading surface: it sits open for long
- * stretches and a bright background next to a wallet popup is unpleasant.
- *
- * The three event sources are colour-coded deliberately rather than decoratively. A
- * model's words are ADVISORY, our own progress is unconfirmed, and a chain-read fact is
- * authoritative — if they render alike, the interface is telling the user that a guess
- * and a settled transaction are the same kind of thing.
- */
-@theme {
-  --color-advisory: oklch(0.78 0.11 85);   /* model — warm, a suggestion */
-  --color-pipeline: oklch(0.72 0.07 250);  /* ours — neutral, unconfirmed */
-  --color-chain:    oklch(0.78 0.13 150);  /* chain — green, settled */
+/* ── Tokens ─────────────────────────────────────────────────────────── */
+
+.dark {
+  color-scheme: dark;
+
+  --background: #0e0e10;
+  --foreground: #ededf0;
+
+  /* The sidebar is its OWN surface. This is the single biggest reason a three-pane
+     layout reads as one workspace instead of three boxes: the panes differ by colour,
+     not only by a hairline border. */
+  --sidebar: #131316;
+  --card: #17171a;
+  --card-foreground: #ededf0;
+  --popover: #1a1a1e;
+  --popover-foreground: #ededf0;
+
+  --primary: #ededf0;
+  --primary-foreground: #131316;
+  --secondary: #232328;
+  --secondary-foreground: #ededf0;
+  --muted: #1e1e23;
+  --muted-foreground: #8f8f99;
+  --accent: #202025;
+  --accent-foreground: #ededf0;
+
+  /* The one accent. Used for the focus ring, selection, and anything that should read as
+     OURS rather than as a status. */
+  --brand: #7c8aff;
+  --brand-foreground: #14151f;
+  --brand-soft: rgba(124, 138, 255, 0.14);
+
+  /* Status colours carry MEANING, so they have to be readable at 11px on their own tint,
+     which is where a badge puts them. These clear 4.5:1 against the surfaces above. */
+  --destructive: #ff6369;
+  --destructive-foreground: #1a0d0e;
+  --success: #3dd68c;
+  --warning: #f5a524;
+
+  --border: rgba(255, 255, 255, 0.09);
+  --input: rgba(255, 255, 255, 0.13);
+  --ring: #7c8aff;
+
+  --shadow-color: rgba(0, 0, 0, 0.45);
 }
 
-html, body, #app {
-  height: 100%;
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-sidebar: var(--sidebar);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-brand-soft: var(--brand-soft);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* THE EVENT SOURCES, as tokens rather than inline classes.
+   *
+   * A model's words are ADVISORY, our own progress is UNCONFIRMED, and a chain-read fact is
+   * AUTHORITATIVE. They are colour-coded because that distinction has to be visible at a
+   * glance — if they render alike, the interface is telling the user that a guess and a
+   * settled transaction are the same kind of thing.
+   *
+   * Warning, muted, and success — reused rather than invented, so retuning the status
+   * palette retunes these too. */
+  --color-advisory: var(--warning);
+  --color-pipeline: var(--muted-foreground);
+  --color-chain: var(--success);
+
+  --font-sans: "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont,
+    "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+
+  /* A SCALE, not ad-hoc rounded-md. Every surface picks from these five. */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-2xl: 18px;
+
+  /* Strong curves — the built-in CSS easings are too weak for UI and read as sluggish. */
+  --ease-out-quart: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out-quart: cubic-bezier(0.77, 0, 0.175, 1);
+
+  --animate-panel-in: panel-in 0.22s var(--ease-out-quart);
+  --animate-pop-in: pop-in 0.18s var(--ease-out-quart);
+  --animate-fade-in: fade-in 0.15s ease-out;
+  --animate-rise-in: rise-in 0.2s var(--ease-out-quart);
 }
 
-body {
-  margin: 0;
-  background: oklch(0.16 0.01 260);
-  color: oklch(0.92 0.01 260);
-  font-family: ui-sans-serif, system-ui, sans-serif;
+/* ── Base ───────────────────────────────────────────────────────────── */
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  html,
+  body,
+  #app {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    /* Inter is drawn slightly loose at UI sizes; this is what makes it read as a product
+       rather than as a webpage. */
+    letter-spacing: -0.011em;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* An app, not a document: buttons are not links and should not advertise themselves. */
+  button {
+    cursor: default;
+  }
+
+  /* ONE FOCUS RING, for keyboard users only, drawn as a shadow rather than an outline so it
+     follows the border radius of whatever it lands on instead of boxing it.
+     Text fields are excluded — a bare field shows focus through its own border, and a field
+     inside a styled wrapper lets the wrapper's focus-within treatment speak alone. */
+  :focus {
+    outline: none;
+  }
+  :focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--ring);
+    border-radius: inherit;
+  }
+  input:focus-visible,
+  textarea:focus-visible {
+    box-shadow: none;
+  }
+}
+
+/* ── Details that make it feel finished ─────────────────────────────── */
+
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--foreground) 16%, transparent);
+  border-radius: 4px;
+  background-clip: padding-box;
+  border: 1px solid transparent;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--foreground) 26%, transparent);
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--brand) 24%, transparent);
+}
+
+@keyframes panel-in {
+  from { transform: translateX(24px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+@keyframes pop-in {
+  from { transform: scale(0.97); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes rise-in {
+  from { transform: translateY(6px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
 }
