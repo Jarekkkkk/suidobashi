@@ -23,6 +23,24 @@ function say(text, kind = 'k') {
   if (el) setHtml(el, html`<span class="${kind}">${text}</span>`);
 }
 
+/**
+ * Render the pipeline's events.
+ *
+ * The SOURCE decides the styling, and that is the point rather than decoration: a
+ * model's words are advisory, our own progress is unconfirmed, and a chain-read fact is
+ * authoritative. Rendering all three identically tells the user that a guess and a
+ * settled transaction are the same kind of thing.
+ *
+ * Terminal events are marked too, so a flow that has stopped looks stopped — including
+ * when it stopped because nobody filled the order, which is routine rather than an
+ * error.
+ */
+function narrate(events) {
+  const el = $('ownerMsg');
+  if (!el || !Array.isArray(events) || !events.length) return;
+  setHtml(el, html`${events.map((e) => html`<div class="ev ${e.source}${e.terminal ? ' terminal' : ''}">${e.text}</div>`)}`);
+}
+
 let lastText = null;
 
 /** Every API call carries the token. Without it the server answers 403. */
@@ -271,9 +289,10 @@ async function ownerAction(kind, body) {
     if (kind === 'order') {
       say('order created — asking the mcp server to fill it…', 'warn');
       const f = await api('/api/fill', { digest: out.digest });
-      // The FULL id, not a prefix: when something goes wrong with an order this is the
-      // only handle anyone has, and a truncated one cannot be looked up.
       const which = f.orderId ? `order ${f.orderId} ` : '';
+      // The events carry the narration, and the source decides the styling: a
+      // chain-confirmed fill must not look like a pipeline guess.
+      narrate(f.events);
       return say(
         f.filled
           ? `filled — ${f.digest} · fee ${f.fee} to the filler · ${which}`

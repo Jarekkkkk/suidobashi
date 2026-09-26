@@ -24,6 +24,7 @@ import { spawnSync } from 'node:child_process';
 import { VAULT_ID, DEPLOYER, USDC_TYPE, REWARD_TYPE, PACKAGE_LATEST_ID, POOL_TICK_SPACING, GUARD_ID, GUARD_SHARED_VERSION } from './addresses.js';
 import { HIRES } from './hires.js';
 import { findCreatedGuard, repointAddresses } from './guard-id.js';
+import { event, endingFor } from './web/events.js';
 
 const PORT = Number(process.env.UI_PORT ?? 8788);
 const HOST = process.env.UI_HOST ?? '127.0.0.1';
@@ -643,6 +644,13 @@ const PAGE = `<!doctype html>
                                 padding:4px 6px; border-radius:4px; font:inherit;
                                 font-size:12px; }
   .owner input { width:5.5em; }
+  /* Event sources are styled apart on purpose: a model's words are advisory, our own
+     progress is unconfirmed, and a chain-read fact is authoritative. */
+  .ev { font-size:12px; padding:2px 0; border-left:2px solid #333; padding-left:8px; }
+  .ev.model { border-color:#7a6a2a; color:#c9b26a; }
+  .ev.pipeline { border-color:#3a4a5a; color:#8fa8c0; }
+  .ev.chain { border-color:#2a5a3a; color:#8fd0a0; }
+  .ev.terminal { font-weight:600; }
   .owner button { padding:4px 10px; font-size:12px; }
   .hire { border:1px solid #2a2a2a; border-radius:6px; padding:6px 10px;
           display:flex; gap:10px; align-items:center; }
@@ -768,7 +776,7 @@ const server = http.createServer((req, res) => {
   //
   // Names are matched literally above, so the path handed to readFileSync is never
   // derived from the request and cannot be steered out of src/web/.
-  const moduleRoutes = { '/page.js': 'page.js', '/markup.js': 'markup.js', '/units.js': 'units.js' };
+  const moduleRoutes = { '/page.js': 'page.js', '/markup.js': 'markup.js', '/units.js': 'units.js', '/events.js': 'events.js' };
   if (req.method === 'GET' && moduleRoutes[req.url]) {
     const name = moduleRoutes[req.url];
     try {
@@ -819,14 +827,35 @@ const server = http.createServer((req, res) => {
           return send(400, JSON.stringify({ error: 'text required' }));
         }
         const r = runAgent(body.text);
-        return send(200, JSON.stringify(r));
+        // The events this step produced. `extracting` is MODEL-sourced because the
+        // model's part is advisory; the verdict is PIPELINE, because the gate is our
+        // own code. Neither is CHAIN — nothing has touched the chain yet.
+        const doc = firstJson(r.stdout);
+        const events = [
+          event('extracting', 'model', 'the local model is reading the request'),
+          doc && doc.decision === 'PROPOSED'
+            ? event('proposed', 'pipeline', 'the gate allowed it')
+            : event('refused', 'pipeline', endingFor('refused', {
+              reason: (doc && doc.validation && doc.validation.reason)
+                || (doc && doc.decision) || 'could not parse a proposal',
+            })),
+        ];
+        return send(200, JSON.stringify({ ...r, events }));
       }
 
       // /api/build: returns bytes to sign, or a refusal with its reason.
       const kind = body.kind || 'swap';
       try {
         const out = build(kind, body);
-        return send(out.error ? 400 : 200, JSON.stringify(out));
+        // A build either produced bytes or was refused. Both are events, and a refusal
+        // is not a transport failure — it is the gate doing its job.
+        const events = out.error || out.refused
+          ? [event('refused', 'pipeline', endingFor('refused', {
+            reason: (out.refused && out.refused.validation && out.refused.validation.reason)
+              || out.refused || out.error,
+          }))]
+          : [event('building', 'pipeline', 'the transaction is built and simulated')];
+        return send(out.error ? 400 : 200, JSON.stringify({ ...out, events }));
       } catch (e) {
         return send(500, JSON.stringify({ error: String(e?.message || e) }));
       }
@@ -855,7 +884,11 @@ const server = http.createServer((req, res) => {
 
       const orderId = findCreatedOrder(digest);
       if (!orderId) {
-        return send(200, JSON.stringify({ filled: false, why: 'no order in that transaction' }));
+        return send(200, JSON.stringify({
+          filled: false,
+          why: 'no order in that transaction',
+          events: [event('refused', 'pipeline', endingFor('refused', { reason: 'no order in that transaction' }))],
+        }));
       }
 
       const url = `http://${MCP_HOST}:${MCP_PORT}/fill`;
@@ -865,10 +898,22 @@ const server = http.createServer((req, res) => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ orderId }),
         });
-        return send(200, JSON.stringify({ orderId, ...(await r.json()) }));
+        const out = await r.json();
+        // `filled` is CHAIN-sourced: it comes from a settlement that either landed or
+        // did not. `expired` is likewise a fact about the order rather than a failure
+        // of ours, and it is worded as the routine outcome it is.
+        const events = out.filled
+          ? [event('filling', 'pipeline', 'a filler took it'),
+             event('filled', 'chain', endingFor('filled', { received: out.received ?? 'the output' }))]
+          : [event('notified', 'pipeline', 'the filler was told'),
+             event('expired', 'chain', endingFor('expired'))];
+        return send(200, JSON.stringify({ orderId, ...out, events }));
       } catch (e) {
         return send(200, JSON.stringify({
-          orderId, filled: false, why: `mcp server unreachable at ${url}: ${e.message}`,
+          orderId,
+          filled: false,
+          why: `mcp server unreachable at ${url}: ${e.message}`,
+          events: [event('notified', 'pipeline', 'the filler could not be reached')],
         }));
       }
     });

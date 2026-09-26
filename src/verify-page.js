@@ -12,6 +12,7 @@
 import fs from 'node:fs';
 import { esc, html, setHtml } from './web/markup.js';
 import { suiToMist, toUnits, usdcToUnits } from './web/units.js';
+import { EVENT_KINDS, SOURCES, TERMINAL_KINDS, event, endingFor } from './web/events.js';
 
 let failures = 0;
 const check = (name, cond, detail = '') => {
@@ -134,8 +135,53 @@ check('every element the page looks up exists in the markup', missing.length ===
   `nothing declares id="${missing.join('", nothing declares id="')}"`);
 check('the check found bindings to verify', looked.length >= 8, `found ${looked.length}`);
 
+// 10. The pipeline's event vocabulary. Two things here are load-bearing rather than
+//     cosmetic: a typo must fail at the point it is written instead of reaching a
+//     browser that does not know how to render it, and the wording of the states a flow
+//     ENDS in must not describe a working outcome as a failure.
+let threw = false;
+try { event('not-a-kind', 'chain', 'x'); } catch { threw = true; }
+check('an unknown event kind throws', threw, 'a typo should fail where it is written');
+
+threw = false;
+try { event('filled', 'not-a-source', 'x'); } catch { threw = true; }
+check('an unknown event source throws', threw);
+
+const filled = event('filled', 'chain', 'done', { received: '0.0067 USDC' });
+check('a terminal kind is marked terminal', filled.terminal === true);
+check('a working kind is not marked terminal',
+  event('filling', 'pipeline', 'x').terminal === false);
+check('an event carries its source', filled.source === 'chain');
+
+// The vocabulary must be internally consistent: a terminal kind that is not also a
+// known kind could never be emitted, so its ending wording would be unreachable.
+check('every event kind is a non-empty string',
+  EVENT_KINDS.length > 0 && EVENT_KINDS.every((k) => typeof k === 'string' && k.length > 0));
+check('every source is a non-empty string',
+  SOURCES.length > 0 && SOURCES.every((s) => typeof s === 'string' && s.length > 0));
+check('every terminal kind is a known kind',
+  TERMINAL_KINDS.every((k) => EVENT_KINDS.includes(k)),
+  'a terminal kind outside the vocabulary could never be emitted');
+
+// Every terminal kind needs wording, or a flow can end with nothing to show.
+for (const k of TERMINAL_KINDS) {
+  check(`terminal kind ${k} has wording`,
+    typeof endingFor(k, { reason: 'r', received: 'x' }) === 'string',
+    'a flow that ends must say what happened');
+}
+check('a non-terminal kind has no ending wording', endingFor('filling') === null);
+
+// The UX rule, as an assertion: with a one-minute window and a self-funding refund,
+// "nobody filled it" is routine. Wording it as an error makes a working system feel
+// broken, and this is the cheapest place to notice that.
+const ERROR_WORDS = /fail|error|invalid|wrong|problem/i;
+for (const k of TERMINAL_KINDS) {
+  const w = endingFor(k, { reason: 'the pool is not allowed', received: '0.0067 USDC' });
+  check(`ending ${k} is not worded as a failure`, !ERROR_WORDS.test(w), `"${w}"`);
+}
+
 if (failures) {
   console.error(`\n${failures} check(s) failed.`);
   process.exit(1);
 }
-console.log('page: all checks passed');
+console.log('page and events: all checks passed');
