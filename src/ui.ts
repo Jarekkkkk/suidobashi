@@ -1326,7 +1326,10 @@ process.on('uncaughtException', (e) => complain('uncaught exception', e));
 process.on('unhandledRejection', (e) => complain('unhandled rejection', e));
 
 const server = http.createServer((req, res) => {
-  const send = (code: number, body: string, type = 'application/json') => {
+  // `string | Uint8Array`, because a font is bytes and `res.end` takes either. Narrowing this
+  // to string made the /fonts/ route fail to compile the moment it was written — which is the
+  // compiler doing its job on a helper that was only ever used with JSON before.
+  const send = (code: number, body: string | Uint8Array, type = 'application/json') => {
     res.writeHead(code, { 'Content-Type': type });
     res.end(body);
   };
