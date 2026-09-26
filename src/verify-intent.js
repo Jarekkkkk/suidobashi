@@ -35,9 +35,9 @@ import { talentFor } from './talents.ts';
 // provides it. That is the design working — and it means these cases were testing a state nobody
 // had set up. Installing it here is part of what the check means, not a workaround: it asserts
 // that the talent's actions are available, which is the thing every case below depends on.
-const swapTalent = talentFor('built-in:swap');
+const swapTalent = talentFor('local:swap');
 if (swapTalent) installTalent(swapTalent.id, swapTalent.name, swapTalent, null);
-if (!listTalents().some((t) => t.id === 'built-in:swap')) {
+if (!listTalents().some((t) => t.id === 'local:swap')) {
   console.error('could not install the swap talent — the cases below would all fail for the wrong reason');
   process.exit(1);
 }

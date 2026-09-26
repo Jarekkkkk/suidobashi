@@ -49,6 +49,20 @@ function migrate(db: Database) {
     -- Every read is "the messages of one chat, in order", so that is the index.
     CREATE INDEX IF NOT EXISTS messages_by_chat ON messages(chat_id, at);
 
+    -- SERVICES, NOT TALENTS. A talent is something the agent can do; a service is somewhere
+    -- that fills a role — a filler that takes orders, later perhaps a data provider. They were
+    -- one table and one tab, which is why installing a filler looked like gaining the ability to
+    -- fill. Registering a service is done BY HAND: the relationship is deliberate, not
+    -- discovered, and an on-chain registry would later be a SOURCE for this table rather than a
+    -- replacement for it.
+    CREATE TABLE IF NOT EXISTS services (
+      id             TEXT PRIMARY KEY,
+      name           TEXT NOT NULL,
+      role           TEXT NOT NULL,
+      url            TEXT NOT NULL,
+      registered_at  INTEGER NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS talents (
       id            TEXT PRIMARY KEY,
       name          TEXT NOT NULL,
@@ -143,6 +157,35 @@ export function append(chatId: string, role: Message['role'], text: string): Mes
   );
   db.run('UPDATE chats SET updated_at = ? WHERE id = ?', [at, chatId]);
   return { id: Number(res.lastInsertRowid), role, text, at };
+}
+
+// ── Services ─────────────────────────────────────────────────────────────────
+
+export type Service = {
+  id: string;
+  name: string;
+  /** What it is FOR — `filler` today. A role, not a verb the agent gains. */
+  role: string;
+  url: string;
+  registeredAt: number;
+};
+
+export function listServices(): Service[] {
+  return open().query(
+    'SELECT id, name, role, url, registered_at AS registeredAt FROM services ORDER BY registered_at',
+  ).all() as Service[];
+}
+
+export function registerService(id: string, name: string, role: string, url: string) {
+  open().run(
+    'INSERT INTO services (id, name, role, url, registered_at) VALUES (?, ?, ?, ?, ?) '
+    + 'ON CONFLICT(id) DO UPDATE SET name = excluded.name, role = excluded.role, url = excluded.url',
+    [id, name, role, url, Date.now()],
+  );
+}
+
+export function unregisterService(id: string) {
+  open().run('DELETE FROM services WHERE id = ?', [id]);
 }
 
 // ── Talents ──────────────────────────────────────────────────────────────────

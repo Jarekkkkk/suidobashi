@@ -27,26 +27,30 @@ type Action = { id: string; title: string };
 type Entry = {
   id: string;
   name: string;
-  kind: 'built-in' | 'mcp';
-  side: 'maker' | 'filler';
+  kind: 'local' | 'remote';
   description: string;
   actions: Action[];
   url?: string;
 };
 
-const SIDE_LABEL: Record<Entry['side'], string> = {
-  maker: 'made by you',
-  filler: 'for fillers',
+/** Somewhere that fills a role. Not a talent: registering one does not make the agent able. */
+type Service = { id: string; name: string; role: string; url: string; description: string };
+
+const KIND_LABEL: Record<Entry['kind'], string> = {
+  local: 'your agent can do',
+  remote: 'connects to a service',
 };
 
-const SIDE_NOTE: Record<Entry['side'], string> = {
-  maker: 'You create the intent; something else fills it.',
-  filler: 'Takes orders other people created. You do not need this to trade.',
+const KIND_NOTE: Record<Entry['kind'], string> = {
+  local: 'Performed by the app itself. No service, no address.',
+  remote: 'A connector. Its actions are yours; the work happens at the service.',
 };
 
 export function TalentsPane() {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [installed, setInstalled] = useState<string[]>([]);
+  const [known, setKnown] = useState<Service[]>([]);
+  const [registered, setRegistered] = useState<string[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -55,9 +59,14 @@ export function TalentsPane() {
 
   const load = useCallback(async () => {
     try {
-      const r = await api<{ marketplace: Entry[]; installedIds: string[] }>('/api/talents');
-      setEntries(r.marketplace ?? []);
-      setInstalled(r.installedIds ?? []);
+      const [t, sv] = await Promise.all([
+        api<{ marketplace: Entry[]; installedIds: string[] }>('/api/talents'),
+        api<{ known: Service[]; registered: { id: string }[] }>('/api/services'),
+      ]);
+      setEntries(t.marketplace ?? []);
+      setInstalled(t.installedIds ?? []);
+      setKnown(sv.known ?? []);
+      setRegistered((sv.registered ?? []).map((x) => x.id));
     } catch {
       setEntries([]);
     } finally {
@@ -106,8 +115,28 @@ export function TalentsPane() {
     }
   }
 
+  async function registerService(id: string) {
+    setBusy(id);
+    try {
+      await api('/api/services', { id });
+      await load();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function unregisterService(id: string) {
+    setBusy(id);
+    try {
+      await api(`/api/services/${encodeURIComponent(id)}`, undefined, 'DELETE');
+      await load();
+    } finally {
+      setBusy(null);
+    }
+  }
+
   const isInstalled = (id: string) => installed.includes(id);
-  const sides: Entry['side'][] = ['maker', 'filler'];
+  const kinds: Entry['kind'][] = ['local', 'remote'];
 
   return (
     <div className="flex h-full flex-col">
@@ -149,16 +178,16 @@ export function TalentsPane() {
           </div>
         )}
 
-        {sides.map((side) => {
-          const group = entries.filter((e) => e.side === side);
+        {kinds.map((kind) => {
+          const group = entries.filter((e) => e.kind === kind);
           if (group.length === 0) return null;
           return (
-            <div key={side} className="mb-5 last:mb-0">
+            <div key={kind} className="mb-5 last:mb-0">
               <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                {SIDE_LABEL[side]}
+                {KIND_LABEL[kind]}
               </div>
               <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground/60">
-                {SIDE_NOTE[side]}
+                {KIND_NOTE[kind]}
               </p>
 
               <ul className="mt-2.5 flex flex-col gap-2">
@@ -219,7 +248,7 @@ export function TalentsPane() {
                         ))}
                       </ul>
 
-                      {t.kind === 'mcp' && (
+                      {t.kind === 'remote' && (
                         <div className="mt-1.5 break-all font-mono text-[10px] text-muted-foreground/50">
                           {t.url}
                         </div>
@@ -231,6 +260,61 @@ export function TalentsPane() {
             </div>
           );
         })}
+
+        {/* SERVICES, NOT TALENTS. Registering one does not make the agent able to do anything —
+            it says who it asks. They were one list, which is why installing a filler looked like
+            gaining the ability to fill. */}
+        <div>
+          <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+            services
+          </div>
+          <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground/60">
+            Who fills a role. Registering one does not give your agent a new ability — it says
+            who to ask. Without one, an order simply expires.
+          </p>
+
+          <ul className="mt-2.5 flex flex-col gap-2">
+            {known.map((sv) => {
+              const on = registered.includes(sv.id);
+              return (
+                <li
+                  key={sv.id}
+                  className={cn(
+                    'rounded-lg border p-2.5 transition-colors',
+                    on ? 'border-brand/40 bg-brand-soft/40' : 'border-border bg-card',
+                  )}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{sv.name}</span>
+                    <span className="shrink-0 rounded-sm bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                      {sv.role}
+                    </span>
+                    {on ? (
+                      <Button size="icon" variant="ghost" className="h-6 w-6"
+                        disabled={busy === sv.id} title="unregister"
+                        aria-label={`unregister ${sv.name}`}
+                        onClick={() => void unregisterService(sv.id)}>
+                        <Trash2 size={12} />
+                      </Button>
+                    ) : (
+                      <Button size="sm" variant="outline" className="h-6 shrink-0 px-2 text-[11px]"
+                        disabled={busy === sv.id}
+                        onClick={() => void registerService(sv.id)}>
+                        register
+                      </Button>
+                    )}
+                  </div>
+                  <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                    {sv.description}
+                  </p>
+                  <div className="mt-1.5 break-all font-mono text-[10px] text-muted-foreground/50">
+                    {sv.url}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
       </div>
     </div>
   );

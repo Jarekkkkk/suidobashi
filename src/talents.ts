@@ -26,55 +26,48 @@ export type TalentAction = {
   title: string;
 };
 
-export type TalentSide = 'maker' | 'filler';
-
 export type MarketplaceTalent = {
-  /** `built-in:<name>` for one the app performs, or the URL for one served over MCP. */
+  /** `local:<name>` for one the app performs, or the URL of the service it connects to. */
   id: string;
   name: string;
-  kind: 'built-in' | 'mcp';
   /**
-   * WHICH SIDE OF A TRADE THIS SERVES, and it is a field rather than a sentence because it was
-   * the thing that confused a real user: a talent called `sui-tokyo-swap` provides `fill`, which
-   * takes someone ELSE's order. Installing it and then asking to swap is a reasonable mistake to
-   * make, and a description buried under the name is not enough to prevent it.
+   * LOCAL means the app performs it itself. REMOTE means it is a connector to a service, and it
+   * exists because that service does — installed by hand, because the relationship is deliberate
+   * rather than discovered.
    *
-   *   maker    you create the intent; something else fills it
-   *   filler   you take intents someone else created
+   * Either way its actions ARE the agent's: a connector is how the agent reaches a service, and
+   * what the service offers is what the agent can do through it.
    */
-  side: TalentSide;
+  kind: 'local' | 'remote';
   description: string;
   actions: TalentAction[];
-  /** Only for MCP talents: where its manifest lives. */
+  /** Only for remote talents: where the service's manifest lives. */
   url?: string;
 };
 
 export const MARKETPLACE: MarketplaceTalent[] = [
   {
-    id: 'built-in:query',
+    id: 'local:query',
     name: 'query',
-    kind: 'built-in',
-    side: 'maker',
+    kind: 'local',
     description: 'Read the chain. No permission needed, because nothing is spent.',
     actions: [
       { id: 'status', title: 'Report what the wallet and the guarded position hold' },
     ],
   },
   {
-    id: 'built-in:swap',
+    id: 'local:swap',
     name: 'swap',
-    kind: 'built-in',
-    side: 'maker',
+    kind: 'local',
     description: 'Escrow SUI or USDC and let someone fill it. Needs an on-chain grant.',
     actions: [
       { id: 'swap', title: 'Swap SUI for USDC, or USDC for SUI, through an escrowed order' },
     ],
   },
   {
-    id: 'built-in:position',
+    id: 'local:position',
     name: 'position',
-    kind: 'built-in',
-    side: 'maker',
+    kind: 'local',
     description: 'Open and manage a guarded liquidity position. Needs a grant and a guard.',
     actions: [
       { id: 'deposit_liquidity', title: 'Add liquidity to the guarded position' },
@@ -82,21 +75,34 @@ export const MARKETPLACE: MarketplaceTalent[] = [
       { id: 'redeem', title: 'Exit the guarded position and take everything back' },
     ],
   },
+];
+
+/**
+ * SERVICES: somewhere that fills a role.
+ *
+ * NOT TALENTS. A talent is something the agent can do; a service is who it asks. They were one
+ * list, which is why installing a filler looked like gaining the ability to fill — a real user
+ * installed it, asked to swap, was refused, then installed `swap` and asked why both were needed.
+ *
+ * REGISTERED BY HAND. The relationship is deliberate: a service exists on-chain and the connector
+ * follows, not the other way round. An on-chain registry would later be a SOURCE for this list
+ * rather than a replacement for it.
+ */
+export type KnownService = {
+  id: string;
+  name: string;
+  role: string;
+  url: string;
+  description: string;
+};
+
+export const KNOWN_SERVICES: KnownService[] = [
   {
-    // THE FILLER'S SIDE, not the maker's — kept in the list so it is visible and honest rather
-    // than something a user has to work out from a manifest. Its action takes someone ELSE's
-    // order, which is why installing it gives the agent nothing to do.
     id: 'http://127.0.0.1:8790',
-    // Named for what it DOES. It was `sui-tokyo-swap`, which promised a verb it does not
-    // provide — the manifest's action is `fill`, the other side of the trade.
     name: 'sui-tokyo-filler',
-    kind: 'mcp',
-    side: 'filler',
+    role: 'filler',
     url: 'http://127.0.0.1:8790',
-    description: 'Takes escrowed orders that OTHERS create. You do not need this to swap.',
-    actions: [
-      { id: 'fill', title: 'Fill an escrowed swap order created by someone else' },
-    ],
+    description: 'Fills the orders you escrow. Without one, an order simply expires.',
   },
 ];
 

@@ -23,12 +23,13 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { VAULT_ID, DEPLOYER, USDC_TYPE, REWARD_TYPE, PACKAGE_LATEST_ID, POOL_TICK_SPACING, GUARD_ID, GUARD_SHARED_VERSION, SLIPPAGE_BPS } from './addresses.js';
 import { HIRES } from './hires.js';
-import { MARKETPLACE, describeTalents, talentFor } from './talents.js';
+import { MARKETPLACE, KNOWN_SERVICES, describeTalents, talentFor } from './talents.js';
 import { findCreatedGuard, repointAddresses } from './guard-id.js';
 import { event, endingFor, type EventKind } from './web/events.js';
 import {
   listChats, createChat, getChat, renameChat, deleteChat, messages, append,
   listTalents, installTalent, uninstallTalent, dbPath,
+  listServices, registerService, unregisterService,
 } from './db.js';
 import { unitsToUsdc } from './web/units.js';
 
@@ -1555,11 +1556,11 @@ const server = http.createServer((req, res) => {
           return send(400, JSON.stringify({ error: 'bad body' }));
         }
 
-        // A BUILT-IN TALENT IS INSTALLED DIRECTLY. There is nothing to fetch: the app performs
-        // it itself, and the entry in the marketplace already says what it can do. Fetching a
-        // URL for it would be asking a server about a capability that lives here.
+        // A LOCAL TALENT IS INSTALLED DIRECTLY. There is nothing to fetch: the app performs it
+        // itself, and the entry in the marketplace already says what it can do. Fetching a URL
+        // would be asking a server about a capability that lives here.
         const listed = talentFor(wanted);
-        if (listed && listed.kind === 'built-in') {
+        if (listed && listed.kind === 'local') {
           installTalent(listed.id, listed.name, listed, null);
           return send(200, JSON.stringify({ ok: true, id: listed.id, name: listed.name }));
         }
@@ -1598,6 +1599,44 @@ const server = http.createServer((req, res) => {
 
     if (req.method === 'DELETE' && id) {
       uninstallTalent(decodeURIComponent(id));
+      return send(200, JSON.stringify({ ok: true }));
+    }
+  }
+
+  if ((req.url ?? '').startsWith('/api/services')) {
+    const parts = (req.url ?? '').split('?')[0].split('/').filter(Boolean);
+    const id = parts[2];
+
+    if (req.method === 'GET' && !id) {
+      // BOTH LISTS. `known` is what the app ships as registerable; `registered` is what has been
+      // registered by hand. A service exists on-chain and the connector follows — not the other
+      // way round — so registering is deliberate rather than discovered.
+      return send(200, JSON.stringify({
+        known: KNOWN_SERVICES,
+        registered: listServices(),
+      }));
+    }
+    if (req.method === 'POST' && !id) {
+      let raw = '';
+      req.on('data', (c) => { raw += c; if (raw.length > 8192) req.destroy(); });
+      req.on('end', () => {
+        let wanted = '';
+        try {
+          ({ id: wanted } = JSON.parse(raw || '{}'));
+        } catch {
+          return send(400, JSON.stringify({ error: 'bad body' }));
+        }
+        const known = KNOWN_SERVICES.find((s) => s.id === wanted);
+        if (!known) {
+          return send(400, JSON.stringify({ error: 'not a known service' }));
+        }
+        registerService(known.id, known.name, known.role, known.url);
+        return send(200, JSON.stringify({ ok: true, id: known.id, name: known.name }));
+      });
+      return;
+    }
+    if (req.method === 'DELETE' && id) {
+      unregisterService(decodeURIComponent(id));
       return send(200, JSON.stringify({ ok: true }));
     }
   }
@@ -1643,9 +1682,13 @@ const server = http.createServer((req, res) => {
           // than by both being written correctly.
           const installed = listTalents();
           const { text: capabilities } = describeTalents(installed.map((t) => t.id));
+          const registered = listServices();
           const text = [
             capabilities ? 'I can do these:' : 'Nothing is installed yet — add a talent first.',
             capabilities,
+            registered.length
+              ? `\nOrders are filled by: ${registered.map((x) => x.name).join(', ')}.`
+              : '',
           ].filter(Boolean).join('\n');
           return send(200, JSON.stringify({
             decision: 'ANSWERED',
