@@ -15,7 +15,7 @@
  *   bun run src/verify-guard.js
  */
 import fs from 'node:fs';
-import { findCreatedGuard, repointAddresses } from './guard-id.js';
+import { findCreatedGuard, repointAddresses } from './guard-id.ts';
 
 const GUARD_ID = '0x8e536b0631b885f8cc3c9b2aaf5c4700b583abea79a09ec6f7cbb8029327cb18';
 const GUARD_SHARED_VERSION = 1017413662;

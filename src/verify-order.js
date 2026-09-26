@@ -8,7 +8,7 @@
  *
  * Run: node src/verify-order.js
  */
-import { buildWithSettledRetry } from './settled-retry.js';
+import { buildWithSettledRetry } from './settled-retry.ts';
 
 let failed = 0;
 const check = (label, ok, detail) => {

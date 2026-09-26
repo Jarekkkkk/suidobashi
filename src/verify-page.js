@@ -11,8 +11,8 @@
  */
 import fs from 'node:fs';
 import { esc, html, setHtml } from './web/markup.js';
-import { suiToMist, toUnits, usdcToUnits } from './web/units.js';
-import { EVENT_KINDS, SOURCES, TERMINAL_KINDS, event, endingFor } from './web/events.js';
+import { suiToMist, toUnits, usdcToUnits } from './web/units.ts';
+import { EVENT_KINDS, SOURCES, TERMINAL_KINDS, event, endingFor } from './web/events.ts';
 
 let failures = 0;
 const check = (name, cond, detail = '') => {
@@ -240,6 +240,24 @@ for (const name of new Set(scriptNames)) {
 //
 // events.ts and units.ts are TypeScript now, so their types live IN the file. There is no
 // second source of truth left to disagree with, which is a better answer than checking one.
+
+// THE DESIGN TOKENS MUST BE IN A SELECTOR THAT APPLIES.
+//
+// They were in a .dark block and nothing ever set that class, so every var() resolved to nothing
+// and the whole app rendered black on white. Undefined custom properties do not error — they fall
+// back — so the failure is invisible to every check that looks for the token's NAME rather than
+// for whether it takes effect. Which is exactly what I did: grep found --sidebar in the built
+// stylesheet and I called it verified.
+//
+// :root always applies. This asserts the tokens are there and not only somewhere unreachable.
+const appCss = fs.readFileSync(new URL('./web/app/app.css', import.meta.url), 'utf-8');
+const rootBlock = appCss.match(/:root\s*\{([\s\S]*?)\n\}/)?.[1] ?? '';
+check('the stylesheet has a :root block', rootBlock.length > 0,
+  'a palette with no always-applying selector renders as black on white');
+for (const token of ['--background', '--foreground', '--sidebar', '--card', '--brand', '--border']) {
+  check(`${token} is defined in :root`, rootBlock.includes(token),
+    'a token behind a selector nothing applies is a token that does not exist');
+}
 
 if (failures) {
   console.error(`\n${failures} check(s) failed.`);

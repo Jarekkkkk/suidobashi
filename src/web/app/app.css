@@ -28,7 +28,19 @@
 
 /* ── Tokens ─────────────────────────────────────────────────────────── */
 
-.dark {
+/*
+ * IN :root, NOT .dark.
+ *
+ * They were in a .dark block and nothing ever set that class, so every var() resolved to
+ * nothing and the whole app rendered black on white. A palette that lives behind a selector
+ * nobody applies is not a palette, and the failure is invisible: undefined custom properties
+ * do not error, they fall back.
+ *
+ * :root always applies, so this cannot be forgotten the way a class can. There is no .dark
+ * block: the app is dark only, and a light palette would be a `:root:not(.dark)` block plus the
+ * class on <html>, added deliberately rather than assumed to exist.
+ */
+:root {
   color-scheme: dark;
 
   --background: #0e0e10;

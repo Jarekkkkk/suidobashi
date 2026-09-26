@@ -20,7 +20,6 @@ import type { Event } from '@/lib/api';
 import { Chat } from '@/components/Chat';
 import { LeftPane } from '@/components/LeftPane';
 import { SigningPane } from '@/components/SigningPane';
-import { Balances } from '@/components/Balances';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
@@ -105,12 +104,7 @@ function App() {
             on-device agent wallet
           </span>
 
-          {/* What you have. Between the title and the wallet, because it is the thing every
-              other control on screen acts on. Hidden on narrow windows rather than wrapped:
-              a balance strip that reflows is harder to read than one that is not there. */}
-          <Balances events={events} className="ml-auto hidden lg:flex" />
-
-          <div className="ml-auto flex items-center gap-2 lg:ml-0">
+          <div className="ml-auto flex items-center gap-2">
             {address ? (
               <>
                 <span className="font-mono text-[11px] text-muted-foreground">

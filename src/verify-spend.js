@@ -16,7 +16,7 @@ import 'dotenv/config';
 import {
   PACKAGE_LATEST_ID, VAULT_ID, POLICY_ID, CLOCK_ID, SUI_TYPE,
   VAULT_SHARED_VERSION, POLICY_SHARED_VERSION, CLOCK_SHARED_VERSION, DEPLOYER,
-} from './addresses.js';
+} from './addresses.ts';
 
 const AMOUNT_MIST = BigInt(process.argv[2] ?? '1000000'); // 0.001 SUI
 // Emit bytes so the keystore can sign, and a real (possibly failing) transaction
