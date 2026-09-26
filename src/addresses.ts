@@ -31,7 +31,7 @@
  * minted before any of this still matches the newest code.
  */
 export const PACKAGE_LATEST_ID =
-  '0xec81877e006460d2a050cdb69946b1b7336b98bd9c0d7050b59fcef42865c347';
+  '0x4529c5490947c2c13997fabe78dfcc38f8645da3582713891eb1620eac4d0632';
 
 /**
  * The UpgradeCap, for running an upgrade from the CLI. Not referenced by any code

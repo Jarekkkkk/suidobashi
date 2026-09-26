@@ -18,6 +18,7 @@
 import 'dotenv/config';
 import {
   PACKAGE_LATEST_ID, POOL_ID, SUI_TYPE, CLOCK_ID, CLOCK_SHARED_VERSION, DEPLOYER,
+  POLICY_ID, POLICY_SHARED_VERSION, VAULT_ID, VAULT_SHARED_VERSION,
 } from './addresses.js';
 
 const EMIT_BYTES = process.argv.includes('--emit-bytes');
@@ -99,12 +100,31 @@ async function main() {
   const nowMs = BigInt(Date.now());
   const expiresAtMs = nowMs + TTL_MS;
 
-  // `create_with_fee` rather than `create` unconditionally: a zero fee is stored as
-  // absent, so it behaves identically to `create` and there is one path to maintain.
+  // `create_with_policy` rather than `create_with_fee`: it reads the maker's remaining
+  // allowance from the ledger and refuses an order larger than it. Until this call changed,
+  // the budget in the policy sheet bounded NOTHING reachable — it gated the vault path, which
+  // nothing calls, while this escrow came out of the wallet and was checked against nothing.
+  //
+  // The policy and vault are read-only here. This is a bound, not a spend: the allowance is
+  // not decremented, so it is a per-order ceiling rather than a running total. Making it a
+  // total means moving the escrow into the vault, which is where the funds would have to live.
+  //
+  // Still `create_with_fee`'s shape otherwise: a zero fee is stored as absent, so it behaves
+  // identically to `create` and there is one path to maintain.
   tx.moveCall({
-    target: `${PACKAGE_LATEST_ID}::order::create_with_fee`,
+    target: `${PACKAGE_LATEST_ID}::order::create_with_policy`,
     typeArguments: [SUI_TYPE],
     arguments: [
+      tx.sharedObjectRef({
+        objectId: POLICY_ID,
+        initialSharedVersion: POLICY_SHARED_VERSION,
+        mutable: false,
+      }),
+      tx.sharedObjectRef({
+        objectId: VAULT_ID,
+        initialSharedVersion: VAULT_SHARED_VERSION,
+        mutable: false,
+      }),
       escrow,
       tx.pure.id(POOL),
       tx.pure.u64(MIN_OUT),
