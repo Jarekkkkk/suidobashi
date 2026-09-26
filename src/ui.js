@@ -185,8 +185,18 @@ async function hires() {
 
   const out = [];
   for (const [name, h] of Object.entries(HIRES)) {
-    const row = { name, policyId: h.policyId, budgetSui: h.budgetSui,
-                  feeBps: h.venue.feeBps, venueId: h.venue.id };
+      // DECLARED IN FULL, because the object gains most of its fields below. Without this the
+      // compiler sees only the literal's initial shape and every later assignment is an error —
+      // which is noise here, but the same pattern would hide a genuine typo in a field name.
+      // Everything the chain fills in is optional: a failed read leaves the row with only its
+      // registry fields and an `error`, which is a state the UI renders.
+      /** @type {{
+       *   name: string, policyId: string, budgetSui: string, feeBps: number, venueId: string,
+       *   agent?: string, suspended?: boolean, venues?: number, ownVenueOpen?: boolean,
+       *   destination?: string, error?: string,
+       * }} */
+      const row = { name, policyId: h.policyId, budgetSui: h.budgetSui,
+                    feeBps: h.venue.feeBps, venueId: h.venue.id };
     try {
       const o = await client.getObject({ objectId: h.policyId, include: { json: true } });
       const j = (o.object ?? o).json ?? {};
@@ -679,7 +689,10 @@ function adoptGuardFrom(digest) {
   // version of this function kept its own copy, so the check tested a module nothing
   // ran while the code that did run went untested -- and the two had already drifted.
   const found = findCreatedGuard(doc);
-  if (found.error) return found;
+  // `in` rather than a truthiness test. The success shape has no `error` property at all, so
+  // reading it is an error on the union — and narrowing on `in` is what tells the compiler
+  // which branch it is looking at.
+  if ('error' in found) return found;
   const { id, version } = found;
 
   activeGuard = { id, version }; // in memory first: the transaction already happened
@@ -874,6 +887,30 @@ function findCreatedOrder(digest) {
   const created = (doc.objectChanges || []).find((/** @type {any} */ c) => c.type === 'created'
     && String(c.objectType || '').includes('::order::Order<'));
   return created?.objectId ?? null;
+}
+
+/**
+ * The ending for a TERMINAL kind, which always has wording.
+ *
+ * `endingFor` returns `string | null`, because a non-terminal kind has no ending — `filling`
+ * is not an outcome. Every call site here passes a terminal kind, where it is always a string,
+ * and the type cannot express that.
+ *
+ * A cast would silence the compiler and keep the real hazard: calling it with a kind that has
+ * no wording would put `null` in an event's text, which the client renders as nothing at all.
+ * This throws instead, which is the same rule the rest of this file follows — a mistake should
+ * fail where it is made, not become a blank line in a browser.
+ *
+ * @param {import('./web/events.js').EventKind} kind
+ * @param {Record<string, unknown>} [detail]
+ * @returns {string}
+ */
+function ending(kind, detail) {
+  const text = endingFor(kind, detail);
+  if (text === null) {
+    throw new Error(`no ending wording for "${kind}" — it is not a terminal kind`);
+  }
+  return text;
 }
 
 /**
@@ -1270,7 +1307,7 @@ const server = http.createServer((req, res) => {
           event('extracting', 'model', 'the local model is reading the request'),
           doc && doc.decision === 'PROPOSED'
             ? event('proposed', 'pipeline', 'the gate allowed it')
-            : event('refused', 'pipeline', endingFor('refused', {
+            : event('refused', 'pipeline', ending('refused', {
               reason: (doc && doc.validation && doc.validation.reason)
                 || (doc && doc.decision) || 'could not parse a proposal',
             })),
@@ -1285,7 +1322,7 @@ const server = http.createServer((req, res) => {
         // A build either produced bytes or was refused. Both are events, and a refusal
         // is not a transport failure — it is the gate doing its job.
         const events = out.error || out.refused
-          ? [event('refused', 'pipeline', endingFor('refused', {
+          ? [event('refused', 'pipeline', ending('refused', {
             reason: (out.refused && out.refused.validation && out.refused.validation.reason)
               || out.refused || out.error,
           }))]
@@ -1322,7 +1359,7 @@ const server = http.createServer((req, res) => {
         return send(200, JSON.stringify({
           filled: false,
           why: 'no order in that transaction',
-          events: [event('refused', 'pipeline', endingFor('refused', { reason: 'no order in that transaction' }))],
+          events: [event('refused', 'pipeline', ending('refused', { reason: 'no order in that transaction' }))],
         }));
       }
 
@@ -1339,9 +1376,9 @@ const server = http.createServer((req, res) => {
         // of ours, and it is worded as the routine outcome it is.
         const events = out.filled
           ? [event('filling', 'pipeline', 'a filler took it'),
-             event('filled', 'chain', endingFor('filled', { received: out.received ?? 'the output' }))]
+             event('filled', 'chain', ending('filled', { received: out.received ?? 'the output' }))]
           : [event('notified', 'pipeline', 'the filler was told'),
-             event('expired', 'chain', endingFor('expired'))];
+             event('expired', 'chain', ending('expired'))];
         return send(200, JSON.stringify({ orderId, ...out, events }));
       } catch (e) {
         return send(200, JSON.stringify({
