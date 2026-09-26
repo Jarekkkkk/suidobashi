@@ -5,6 +5,7 @@ import type { Event } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { ActionForm } from '@/components/ActionForm';
+import { ChatsPane } from '@/components/ChatsPane';
 
 /*
  * The left pane: what is installed, and what is left over.
@@ -83,8 +84,23 @@ function Pill({ tone, children }: { tone: 'muted' | 'chain' | 'advisory'; childr
   );
 }
 
-export function LeftPane({ events, say, onTerms }: { events: Event[]; say: Say; onTerms: OnTerms }) {
-  const [tab, setTab] = useState<'talents' | 'notifications'>('talents');
+export function LeftPane({
+  events,
+  say,
+  onTerms,
+  chatId,
+  onSelectChat,
+  onNewChat,
+}: {
+  events: Event[];
+  say: Say;
+  onTerms: OnTerms;
+  chatId: string | null;
+  onSelectChat: (id: string) => void;
+  onNewChat: (id: string) => void;
+}) {
+  // Chats first: it is the tab you return to, and the one that says what the app is for.
+  const [tab, setTab] = useState<'chats' | 'talents' | 'notifications'>('chats');
   const [out, setOut] = useState<Outstanding | null>(null);
   const [hires, setHires] = useState<Hire[] | null>(null);
   const [busy, setBusy] = useState(false);
@@ -215,6 +231,7 @@ export function LeftPane({ events, say, onTerms }: { events: Event[]; say: Say; 
       {/* A plain tab strip rather than the shadcn Tabs component: two tabs, no keyboard
           roving, and vendoring Radix for this would be more code than it replaces. */}
       <div className="flex shrink-0 items-center gap-1 border-b border-border px-3 py-2">
+        <Tab active={tab === 'chats'} onClick={() => setTab('chats')}>chats</Tab>
         <Tab active={tab === 'talents'} onClick={() => setTab('talents')}>talents</Tab>
         <Tab active={tab === 'notifications'} onClick={() => setTab('notifications')}>
           outstanding
@@ -233,6 +250,10 @@ export function LeftPane({ events, say, onTerms }: { events: Event[]; say: Say; 
       )}
 
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
+        {tab === 'chats' && (
+          <ChatsPane current={chatId} onSelect={onSelectChat} onNew={onNewChat} />
+        )}
+
         {tab === 'talents' && (
           <div className="flex flex-col gap-3">
             {/*

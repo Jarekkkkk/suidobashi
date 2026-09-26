@@ -16,7 +16,7 @@
 import { createRoot } from 'react-dom/client';
 import { useState, useEffect, useCallback } from 'react';
 import { wallet, short } from '@/lib/wallet';
-import type { Event } from '@/lib/api';
+import { api, type Event } from '@/lib/api';
 import { Chat } from '@/components/Chat';
 import { LeftPane } from '@/components/LeftPane';
 import { SigningPane } from '@/components/SigningPane';
@@ -58,7 +58,59 @@ function App() {
   // create a second source of truth to drift.
   const [events, setEvents] = useState<Event[]>([]);
   const [terms, setTerms] = useState<Record<string, unknown> | null>(null);
-  const say = useCallback((e: Event) => setEvents((prev) => [...prev, e]), []);
+  const [chatId, setChatId] = useState<string | null>(null);
+
+  /**
+   * Show an event, and keep it.
+   *
+   * ONE WRITE POINT, which is the point of doing it here rather than in the chat. An event and a
+   * stored message are the same object — the transcript cannot come to disagree with what
+   * happened, because there is only one thing happening.
+   *
+   * Fire and forget: a failed write must not stop the conversation, and the alternative is
+   * awaiting a round trip before the user sees their own message.
+   */
+  const say = useCallback((e: Event) => {
+    setEvents((prev) => [...prev, e]);
+    if (!chatId) return;
+    // `ask` is what the chat renders as "you", so it is stored as the user's turn rather than
+    // as its pipeline source.
+    void api(`/api/chats/${chatId}`, {
+      role: e.kind === 'ask' ? 'user' : e.source,
+      text: e.text,
+    }).catch(() => { /* the message is on screen either way */ });
+  }, [chatId]);
+
+  /** Load a conversation's history into the transcript. */
+  const openChat = useCallback(async (id: string) => {
+    try {
+      const r = await api<{ messages: { role: string; text: string }[] }>(`/api/chats/${id}`);
+      setEvents(r.messages.map((m) => ({
+        kind: m.role === 'user' ? 'ask' : m.role,
+        source: (m.role === 'user' ? 'pipeline' : m.role) as Event['source'],
+        text: m.text,
+        terminal: false,
+      })));
+      setChatId(id);
+    } catch {
+      setNote('could not open that conversation');
+    }
+  }, []);
+
+  // There is always a chat, so nothing said is lost for want of somewhere to put it. The newest
+  // one if there is one, a fresh one otherwise.
+  useEffect(() => {
+    void (async () => {
+      try {
+        const r = await api<{ chats: { id: string }[] }>('/api/chats');
+        if (r.chats.length > 0) return void openChat(r.chats[0].id);
+        const c = await api<{ id: string }>('/api/chats', { title: 'new chat' });
+        setChatId(c.id);
+      } catch {
+        setNote('could not reach local storage');
+      }
+    })();
+  }, [openChat]);
 
   // Follow the wallet's own connection state rather than tracking it locally: the user can
   // disconnect from the extension, and a stale address here would let them try to sign.
@@ -93,7 +145,14 @@ function App() {
         'hidden w-[260px] shrink-0 flex-col border-r border-border bg-sidebar',
         'md:flex',
       )}>
-        <LeftPane events={events} say={say} onTerms={setTerms} />
+        <LeftPane
+          events={events}
+          say={say}
+          onTerms={setTerms}
+          chatId={chatId}
+          onSelectChat={(id) => void openChat(id)}
+          onNewChat={(id) => { setChatId(id); setEvents([]); }}
+        />
       </aside>
 
       {/* Centre — the conversation. The page colour, because it is the thing you look at. */}
