@@ -10,9 +10,11 @@
  * working shell rather than part of proving the shell works.
  */
 import { createRoot } from 'react-dom/client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { wallet, short } from '@/lib/wallet';
+import type { Event } from '@/lib/api';
 import { Chat } from '@/components/Chat';
+import { SigningPane } from '@/components/SigningPane';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
@@ -45,6 +47,13 @@ function App() {
   const ready = useWalletBridge();
   const [address, setAddress] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+
+  // The flow's events and the terms of the last build live HERE rather than in the chat,
+  // because two panes read them. Keeping them in the chat and copying them across would
+  // create a second source of truth to drift.
+  const [events, setEvents] = useState<Event[]>([]);
+  const [terms, setTerms] = useState<Record<string, unknown> | null>(null);
+  const say = useCallback((e: Event) => setEvents((prev) => [...prev, e]), []);
 
   // Follow the wallet's own connection state rather than tracking it locally: the user can
   // disconnect from the extension, and a stale address here would let them try to sign.
@@ -108,15 +117,12 @@ function App() {
           <p className="border-b border-white/10 px-4 py-2 text-xs text-amber-300/80">{note}</p>
         )}
 
-        <Chat address={address} />
+        <Chat address={address} events={events} onSay={say} onTerms={setTerms} />
       </main>
 
       {/* Right — what is about to be signed, and which step of the flow we are at. */}
-      <aside className="hidden border-l border-white/10 p-4 xl:block">
-        <div className="text-xs uppercase tracking-wider text-white/40">signing</div>
-        <p className="mt-3 text-sm text-white/50">
-          The step indicator and the transaction's terms, read from the chain.
-        </p>
+      <aside className="hidden overflow-y-auto border-l border-white/10 xl:block">
+        <SigningPane events={events} terms={terms} />
       </aside>
     </div>
   );

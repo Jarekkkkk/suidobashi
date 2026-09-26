@@ -37,9 +37,18 @@ const SOURCE_STYLE: Record<Event['source'], string> = {
  */
 const usdc = (raw: string | number | undefined) => `${fromUnits(raw, 6)} USDC`;
 
-export function Chat({ address }: { address: string | null }) {
+export function Chat({
+  address,
+  events,
+  onSay,
+  onTerms,
+}: {
+  address: string | null;
+  events: Event[];
+  onSay: (e: Event) => void;
+  onTerms: (t: Record<string, unknown> | null) => void;
+}) {
   const [text, setText] = useState('');
-  const [events, setEvents] = useState<Event[]>([]);
   const [busy, setBusy] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
 
@@ -49,7 +58,9 @@ export function Chat({ address }: { address: string | null }) {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [events]);
 
-  const say = useCallback((e: Event) => setEvents((prev) => [...prev, e]), []);
+  // The events live in the app above, because the signing pane reads them too. One source
+  // of truth, so the pane cannot drift out of step with the conversation.
+  const say = onSay;
 
   /**
    * Build, sign, submit — the middle of every flow, extracted because the reclaim needs
@@ -62,6 +73,9 @@ export function Chat({ address }: { address: string | null }) {
   ): Promise<string | null> => {
     const built = await api<BuildResult>('/api/build', { kind, ...body });
     (built.events ?? []).forEach(say);
+    // Reported before the signature is requested, so the pane can show what is about to be
+    // authorised while there is still a decision to make.
+    onTerms(built.proposal ?? null);
     if (built.error || !built.bytes || !built.id) {
       if (!built.events?.length) {
         say({
@@ -79,13 +93,23 @@ export function Chat({ address }: { address: string | null }) {
       say({ kind: 'wallet', source: 'pipeline', text: 'the wallet has not loaded', terminal: true });
       return null;
     }
+    // The wallet is about to ask for a signature. Emitted because this is the moment the
+    // flow is waiting on a PERSON, and nothing else would mark it: the signing happens
+    // inside the extension, outside this app, so the step indicator would otherwise jump
+    // straight from build to submit.
+    say({
+      kind: 'signing',
+      source: 'pipeline',
+      text: 'waiting for the wallet to sign…',
+      terminal: false,
+    });
     // Signed in the wallet, by the user. The server never sees a key.
     const signed = await w.sign(built.bytes);
 
     const out = await api<SubmitResult>('/api/submit', { id: built.id, signature: signed.signature });
     (out.events ?? []).forEach(say);
     return out.digest ?? null;
-  }, [say]);
+  }, [say, onTerms]);
 
   /** The whole swap: propose, then the escrow, then hand it to the filler. */
   async function send() {
