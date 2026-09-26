@@ -300,6 +300,16 @@ and `src/web/markup.js`, served as real modules. Both are linted and `node --che
 When checking a served page, extract the script and run `node --check` on it — do not
 eyeball it, and do not trust the linter.
 
+**The same trap, one layer out: a backtick inside a template literal ENDS the string.**
+The SQLite schema in `src/db.ts` is one `db.run(\`…\`)` call, and a comment inside it used
+backticks around identifiers. Each one terminated the template, so the SQL after it became
+JavaScript and the file would not parse.
+
+Caught immediately because it is TypeScript in a file the compiler reads. In a served string it
+would have been silent — which is exactly what happened to the page above, twice. The rule is
+narrower than "do not use backticks": inside a template literal, backticks and backslashes are
+both consumed, so write the comment without them.
+
 **Already-safe markup must be a String, not a marker object.** The escaping helper
 marks interpolations it produced as safe so a nested template is not escaped twice.
 Done with a plain `{ [SAFE]: markup }` object, this breaks the most ordinary pattern
