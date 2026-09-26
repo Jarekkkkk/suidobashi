@@ -66,7 +66,20 @@ export async function signAndSubmit(
     text: 'waiting for the wallet to sign…',
     terminal: false,
   });
-  const signed = await w.sign(built.bytes);
+
+  // The wallet call is wrapped so a failure inside it is ATTRIBUTABLE. An error thrown here
+  // carries no context otherwise — "Cannot read properties of undefined (reading 'owner')"
+  // says nothing about which step produced it, and the only way to find out was to reason
+  // about it. Naming the step, and carrying the first stack frame, makes the next report
+  // answer the question instead of prompting another guess.
+  let signed;
+  try {
+    signed = await w.sign(built.bytes);
+  } catch (e) {
+    const err = e instanceof Error ? e : new Error(String(e));
+    const frame = (err.stack ?? '').split('\n')[1]?.trim() ?? 'no stack';
+    throw new Error(`the wallet refused to sign: ${err.message} — ${frame}`);
+  }
 
   const out = await api<SubmitResult>('/api/submit', { id: built.id, signature: signed.signature });
   (out.events ?? []).forEach(say);

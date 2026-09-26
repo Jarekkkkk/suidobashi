@@ -77,6 +77,30 @@ window.agentWallet = {
    */
   async sign(txBytesBase64) {
     if (!currentAddress()) throw new Error('no wallet connected');
+
+    // THE ACCOUNT MUST STILL EXIST IN THE WALLET, not merely in the connection.
+    //
+    // dApp Kit resolves the signing account itself — `resolveSigningAccount` then
+    // `getWalletAccountForUiWalletAccount` — and when the account is no longer in the wallet's
+    // own list, the second lookup reads `.owner` on undefined. The user sees:
+    //
+    //   Cannot read properties of undefined (reading 'owner')
+    //
+    // which names neither the wallet, the account, nor anything actionable. It happens when
+    // the extension locks, or its account list changes, while the page stays open — the
+    // connection still holds an address, so the check above passes and the failure surfaces
+    // two layers down in library internals.
+    //
+    // Checked here so the message says what to do instead.
+    const connection = dAppKit.stores.$connection.get();
+    const connected = connection?.account?.address;
+    const stillOffered = dAppKit.stores.$wallets.get()
+      .some((w) => (w.accounts ?? []).some((a) => a.address === connected));
+    if (!stillOffered) {
+      throw new Error('the connected account is no longer offered by any wallet — the extension '
+        + 'may have locked or switched accounts. Reconnect the wallet and try again.');
+    }
+
     const { signature } = await dAppKit.signTransaction({ transaction: txBytesBase64 });
     if (!signature) throw new Error('wallet returned no signature');
     return { signature };
