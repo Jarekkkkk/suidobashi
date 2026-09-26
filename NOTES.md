@@ -590,6 +590,18 @@ same diagnostic names the fix, because that type has `store`. The private form o
 a type the calling module declares, which is why `transfer::share_object(guard)` is right for
 our own guard one line below and wrong for the BalanceManager above it.
 
+**DeepBook's `OrderInfo` is not declared by the module that returns it.** `pool::place_limit_order`
+returns `OrderInfo`, but the type lives in `deepbook::order_info`, and its source sits in
+`sources/book/order_info.move` — so neither the returning module nor the file path names it. A
+wrapper that returns it has to import it separately. The compiler reports it as an unbound type,
+which reads like the function returns nothing rather than like a missing import.
+
+**`let _ = f()` does not discard a tuple.** A test helper returning `(ID, ID)` cannot be dropped
+with `let _ =`; the compiler rejects it as an expression-list type and the fix is `let (_, _) =`.
+A single-value return drops fine, so the error only appears on the helpers that return a pair —
+which is exactly the shape a setup helper has, and exactly where a test wants to ignore both
+halves.
+
 ## Mainnet feature flags (protocol 136, read from the node)
 
 ```text

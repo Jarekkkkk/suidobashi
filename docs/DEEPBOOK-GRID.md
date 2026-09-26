@@ -129,7 +129,16 @@ Maker only (`ctx.sender() == guard.maker`): `create<Base,Quote>` (takes the BM +
 all, revoke the TradeCap — the wrapper goes inert, balances back with the user).
 
 Agent only (`ctx.sender() == guard.agent`, not paused, inside bounds): `buy` · `sell` · `cancel` ·
-`cancel_all`. Event per placement carrying `order_id`, `is_bid`, `price`, `quantity`.
+`cancel_all`.
+
+Built so far: `create`, the maker's knobs `set_agent`/`set_bounds`/`set_paused`, and the agent
+paths `buy`/`sell`/`cancel`/`cancel_all`. The maker's capital paths — `deposit`, `withdraw`,
+`stop`, `redeem` — are the remaining steps. `stop` is `set_paused(true)` plus the
+`cancel_all_orders` that a paused agent can no longer do for it.
+
+Dropped from the plan: the per-placement event. DeepBook already emits one and
+`place_limit_order` returns `OrderInfo`, so a guard-side copy would be a duplicate carrying the
+same order id.
 
 `Move.toml` gains the DeepBook dep beside the existing Cetus MVR dep — pinned to git at tag
 `v8.0.0`, not MVR (its version-8 record has no git info) and not `main` (which is ahead of the
