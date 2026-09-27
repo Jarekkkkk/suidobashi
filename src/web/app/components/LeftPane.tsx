@@ -9,6 +9,8 @@ import { SourceAvatar } from '@/components/Avatar';
 import { PolicySheet } from '@/components/PolicySheet';
 import { ChatsPane } from '@/components/ChatsPane';
 import { TalentsPane } from '@/components/TalentsPane';
+import { StrategiesPane } from '@/components/StrategiesPane';
+import { GuardPane } from '@/components/GuardPane';
 
 /*
  * The left pane: what is installed, and what is left over.
@@ -338,10 +340,11 @@ export function LeftPane({
           <div className="flex h-full flex-col">
             {/* What the model can DO. */}
             <TalentsPane />
-            {/* HIDDEN for now, not deleted. The deepbook guard and the strategy listing are still
-                `GuardPane.tsx` and `StrategiesPane.tsx` in this directory, and bringing either back
-                is one import and one line here. They were showing live chain JSON — useful while it
-                was being built, and noise in a pane whose job is to list what the model can call. */}
+            {/* Both of these are capabilities rather than places in the app: one is a live account an
+                agent may trade inside limits, the other is the catalogue a maker points a guard at.
+                They were hidden for a demo; they belong in the pane that lists capabilities. */}
+            <StrategiesPane />
+            <GuardPane />
           </div>
         )}
 
