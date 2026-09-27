@@ -90,6 +90,40 @@ export const MARKETPLACE: MarketplaceTalent[] = [
       },
     ],
   },
+  {
+    // A THIRD SERVER, and the reason is the model in this file's header rather than a preference: an
+    // `id` IS a server address and is unique, so a capability that is its own talent has to be its
+    // own server. The grid could not be a second entry pointing at the swap filler's port without
+    // asserting that one server is two talents.
+    //
+    // It is also the first talent whose server signs with a key the maker does not need to hold. The
+    // operator is an ADDRESS INSIDE THE GUARD, and the band, the size and the budget the maker sets
+    // there are the whole of its reach — nothing at the operator can be stolen, which is why the
+    // description says that before it says what the grid does.
+    //
+    // `grid.run` spends, and it is marked so: the gate is fail-closed, and a talent that declared a
+    // spending action as a read would be how value moves without a grant. The grid's own bound is
+    // the guard, not an allowance — but a caller who must first hold a grant is a caller who cannot
+    // arrive without one.
+    id: 'http://127.0.0.1:8792',
+    name: 'SUI/USDC long grid',
+    server: 'http://127.0.0.1:8792',
+    description: 'Rests a ladder of bids inside a band and re-quotes it as the book moves. The '
+      + 'operator holds nothing of yours: the band, the size and the budget on your guard are the '
+      + 'whole of its reach, and the chain enforces them.',
+    actions: [
+      {
+        id: 'grid.status',
+        title: 'Read the guard: its limits, the book, the funds, and what a pass would do',
+        spends: false,
+      },
+      {
+        id: 'grid.run',
+        title: 'Place one ladder level through the guard, inside the limits the maker set',
+        spends: true,
+      },
+    ],
+  },
 ];
 
 /** The entry for an installed id, or null if it is no longer in the list. */
