@@ -111,19 +111,16 @@ export function GuardPane() {
         could not.
       </p>
 
-      <Section label="the account">
-        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px]">
-          <Term label="SUI" value={coins(state?.funds?.sui, 9)} />
-          <Term label="USDC" value={coins(state?.funds?.usdc, 6)} />
-          {state?.guard?.committed !== undefined && (
-            <Term label="committed" value={coins(state.guard.committed, 9)} />
-          )}
-          {state?.guard?.budget !== undefined && (
-            <Term label="budget" value={coins(state.guard.budget, 9)} />
-          )}
-          {last?.resting !== undefined && <Term label="resting" value={String(last.resting)} />}
-        </dl>
-      </Section>
+      {/* The account's figures are deliberately NOT drawn here. They are a talent action —
+          `grid.status` on the mcp-server, and `/api/guard` for this page — so an agent fetches the
+          same numbers the maker would be reading, and there is one answer rather than two. A pane
+          that reads the chain itself is a second implementation, and this one already disagreed
+          with the pool: the BalanceManager read zero while the pool held 1.16 USDC owed to the same
+          account. The honest place for that number is the action, not this card. */}
+      <p className="text-[10px] leading-relaxed text-muted-foreground">
+        The account's balances and the guard's limits are read through the <code>grid.status</code>{' '}
+        action — the same one an agent calls — and are not drawn here. One answer, not two.
+      </p>
 
       {state?.book && (
         <Section label="the book">
