@@ -348,6 +348,25 @@ async function main() {
       return;
     }
 
+    case 'limits': {
+      // The maker's knobs, made reachable because the walkthrough creates a guard with a budget of
+      // 1e12: deliberately loose, so a first order is not blocked by a number nobody has measured
+      // yet — and a loose budget is not a limit. `committed` is MONOTONE, so a budget set BELOW it
+      // locks the agent out rather than underflowing. Fail-closed, and reachable on purpose.
+      const { setBudgetTx, setPausedTx } = await import('./deepbook.js');
+      const { DEEPBOOK_GUARD_ID } = await import('./addresses.js');
+      const guard = flag('--guard', DEEPBOOK_GUARD_ID ?? '');
+      const budget = flag('--budget');
+      const paused = flag('--paused');
+      if (!guard) fail('--guard is required');
+      if (!budget && !paused) fail('pass --budget <quantity-units> and/or --paused true|false');
+      const tx = new Transaction();
+      if (budget) setBudgetTx(tx, guard, BigInt(budget));
+      if (paused) setPausedTx(tx, guard, paused === 'true');
+      await run(tx, { guard, budget: budget || null, paused: paused || null });
+      return;
+    }
+
     case 'cancel': {
       const bm = flag('--bm');
       const guard = flag('--guard');
@@ -426,7 +445,7 @@ async function main() {
     }
 
     default:
-      fail(`--step must be one of: whoami, setup, deposit, probe, order, cancel, withdraw, inspect (got ${STEP ?? 'nothing'})`);
+      fail(`--step must be one of: whoami, setup, deposit, probe, order, cancel, limits, withdraw, inspect (got ${STEP ?? 'nothing'})`);
   }
 }
 

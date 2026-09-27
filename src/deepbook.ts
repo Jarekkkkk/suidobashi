@@ -332,6 +332,33 @@ export function createGuardTx(
   });
 }
 
+// === The maker's knobs ===
+//
+// The guard's own settings, reachable from here because the walkthrough creates a guard with a
+// DELIBERATELY loose budget — a first order should not be blocked by a number nobody has measured —
+// and a loose budget is not a limit. Replacing it with one worth having is the maker's job, and that
+// job needs a route from this file to the module.
+
+/** The total quantity the agent may ever ask for, across every order. Maker-gated. */
+export function setBudgetTx(tx: Transaction, guardId: string, budget: bigint) {
+  if (!DEEPBOOK_GUARD_PACKAGE) throw new Error('the guard module is not published');
+  return tx.moveCall({
+    target: `${DEEPBOOK_GUARD_PACKAGE}::deepbook_guard::set_budget`,
+    typeArguments: [...DEEPBOOK_POOL_TYPE_ARGS],
+    arguments: [tx.object(guardId), tx.pure.u64(budget)],
+  });
+}
+
+/** Freeze or unfreeze every agent path. Maker-gated, and the reversible stop. */
+export function setPausedTx(tx: Transaction, guardId: string, paused: boolean) {
+  if (!DEEPBOOK_GUARD_PACKAGE) throw new Error('the guard module is not published');
+  return tx.moveCall({
+    target: `${DEEPBOOK_GUARD_PACKAGE}::deepbook_guard::set_paused`,
+    typeArguments: [...DEEPBOOK_POOL_TYPE_ARGS],
+    arguments: [tx.object(guardId), tx.pure.bool(paused)],
+  });
+}
+
 /**
  * The default expiry: an hour out, in milliseconds.
  *
