@@ -137,8 +137,11 @@ Three details worth pointing at while presenting:
 
 - **The refusal is a feature.** A pass that would breach the band or the budget is refused *before*
   signing, with the reason a maker understands. The chain would refuse it too, with an abort code.
-- **The read-back is not a formality.** "Submitted" and "on the book" are different claims; the runner
-  reads the second one, and that habit is what caught the order that had filled rather than vanished.
+- **The read-back is not a formality.** "Submitted" and "on the book" are different claims, and the
+  runner reads the second one — which is why a pass reports `resting: 1` rather than a digest and a
+  hope. It is also how a gap was found rather than hidden: an order left the book with no proceeds
+  arriving anywhere these reads can see, and DeepBook's *owed* balance has no public accessor. That is
+  **unresolved**, about 1.16 USDC, and this doc says so instead of dressing it as a fill.
 - **`committed` is monotone.** The budget counts what the agent has ever asked for and never refunds,
   including on a cancel. That is deliberate — a budget that refilled itself would bound nothing.
 
