@@ -371,14 +371,37 @@ const server = http.createServer((req, res) => {
   // === the grid, as a talent ===
   // A person can run this from a terminal and an agent can call it here; both reach the same
   // runner, so the manifest below describes something that is already true.
-  if (req.method === 'GET' && req.url === '/grid/status') {
-    const out = runGrid(['--side', 'ask', '--levels', '1']);
-    return json(res, 200, { ok: out.status === 0, steps: out.steps, stderr: out.stderr });
-  }
-
-  if (req.method === 'POST' && req.url === '/grid/run') {
-    const out = runGrid(['--side', 'ask', '--levels', '1', '--execute']);
-    return json(res, 200, { ok: out.status === 0, steps: out.steps, stderr: out.stderr });
+  // The grid actions take their parameters by QUERY, like /schedule, so neither needs a body parser.
+  // A talent whose action ignores its input is not a talent an agent can use: `side` and `levels`
+  // are the difference between a ladder and a single order, and `expire` is the difference between
+  // a test and a strategy.
+  if ((req.url ?? '').startsWith('/grid/')) {
+    let url: URL;
+    try {
+      url = new URL(`http://local${req.url}`);
+    } catch {
+      return json(res, 400, { error: 'bad request URL' });
+    }
+    const run = url.pathname === '/grid/run';
+    if (!run && url.pathname !== '/grid/status') {
+      return json(res, 404, { error: `no such grid action: ${url.pathname}` });
+    }
+    const side = url.searchParams.get('side') === 'bid' ? 'bid' : 'ask';
+    // Clamped, because an unbounded ladder is a way to empty an account by accident, and an
+    // unbounded expiry is a way to leave orders nobody remembers placing.
+    const levels = String(Math.min(Math.max(Number(url.searchParams.get('levels')) || 1, 1), 20));
+    const expire = String(Math.min(Math.max(Number(url.searchParams.get('expire')) || 60, 1), 1440));
+    const out = runGrid([
+      '--side', side, '--levels', levels, '--expire-min', expire,
+      ...(run ? ['--execute'] : []),
+    ]);
+    return json(res, 200, {
+      ok: out.status === 0,
+      ran: run,
+      requested: { side, levels: Number(levels), expireMinutes: Number(expire) },
+      steps: out.steps,
+      stderr: out.stderr,
+    });
   }
 
   // Schedules by QUERY rather than by body: three small verbs against one table, and reading a
@@ -432,17 +455,26 @@ const server = http.createServer((req, res) => {
         title: 'Read the DeepBook guard',
         description: 'The account an agent may trade: its limits, the book, the funds it holds, and '
           + 'what a pass would do. Changes nothing and signs nothing.',
+        terms: {
+          side: 'ask or bid — which side the ladder is quoted on',
+          levels: '1 to 20, per pass',
+          expire: 'minutes an order lives, 1 to 1440',
+        },
       }, {
         id: 'grid.run',
         title: 'Run one grid pass',
-        description: 'Places one ladder level through the guard, signed by whoever holds the seat. '
-          + 'The guard enforces the band, the per-order bound, the budget and the pause, so this '
-          + 'cannot exceed what the maker set.',
+        description: 'Places a ladder through the guard, signed by whoever holds the seat.',
+        terms: {
+          boundBy: 'the guard, ON CHAIN — the band, the per-order bound, the budget, the pause',
+          notBoundBy: 'this server. The limits hold even if every server in the path is compromised.',
+          expires: 'an expiry is REQUIRED; DeepBook refuses zero, and expiry is not a timer — order '
+            + 'funds leave on a cancel, not on a clock',
+        },
       }],
       routes: {
         fill: 'POST /fill  { "orderId": "0x…" }',
-        'grid.status': 'GET /grid/status',
-        'grid.run': 'POST /grid/run',
+        'grid.status': 'GET /grid/status?side=&levels=&expire=',
+        'grid.run': 'POST /grid/run?side=&levels=&expire=',
         schedule: 'GET /schedule · POST /schedule?every=60 · DELETE /schedule?id=…',
       },
     });
