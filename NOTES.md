@@ -756,6 +756,21 @@ to user)" and "owed balances (owed by user)" on the pool's Account — so nothin
 BalanceManager can see it. That is where an order's funds can sit after the order has left the book,
 and finding them needs DeepBook's SDK or an indexer rather than another simulation.
 
+**A BalanceManager's balance is not the account's balance — the POOL holds the difference.** Settled
+funds are credited to the pool's per-account ledger and only moved into the BalanceManager when a
+settlement runs: `vault::settle_balance_manager`, called during a pool operation that involves that
+account, and performed by NO simulation. So after an order filled, `balance_manager::balance<T>` read
+zero while 1.1594 USDC sat in the pool owed to the same account, and several turns went into hunting
+a loss that was not a loss.
+
+How to read it: `pool::account(pool, bm)` returns the Account, whose BCS tail is two 24-byte Balances —
+settled then owed — three u64s each. `pool::locked_balance` covers funds inside open orders.
+`account::owed_balances` is PUBLIC IN THE v8.0.0 TAG AND ABSENT FROM THE DEPLOYED PACKAGE — the same
+tag-versus-deployed gap as `place_post_only_limit_order`; check the ABI on chain, not the tag.
+
+Recovering it needs one real pool operation by that account. A deposit does NOT settle it, because a
+deposit never touches the pool. One small order does.
+
 ## Mainnet feature flags (protocol 136, read from the node)
 
 ```text
