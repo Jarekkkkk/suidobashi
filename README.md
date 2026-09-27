@@ -27,6 +27,7 @@ Two consequences that shape the code:
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How does it work **today**? Objects, access control, the gate stack, the swap route, trust boundaries. |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | **Why** is it like this? Every decision with its rationale, what was rejected and why, and the consequences. |
 | [docs/MCP-STANDARD.md](docs/MCP-STANDARD.md) | The **forward design**: the publisher/agent contract — manifest, action protocol, verification rules. Not built yet. |
+| [docs/TALENT-AND-BOUNDARY.md](docs/TALENT-AND-BOUNDARY.md) | **How does a talent work with a boundary?** Three Mermaid diagrams — the architecture, the design (what an agent can call vs what it cannot exceed), and one pass end to end. |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | What is next, in what order, and **why that order**. Plus open questions and deferrals. |
 | [NOTES.md](NOTES.md) | Traps that cost real time. Read this before touching Move or the CLI — it will save you a day. |
 
