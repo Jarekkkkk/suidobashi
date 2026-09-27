@@ -746,6 +746,16 @@ best ask crossed anyway between the level-2 read and the build a second later, a
 runner and is really the market being faster than its reader — so the margin is a market property,
 not a constant, and the number in the code is a measurement rather than a preference.
 
+**A BalanceManager's money is in a Table, and the owed half is not on the BalanceManager at all.**
+Reading the account's own JSON shows `balances: { id, size }` — a Sui Table, so its entries are dynamic
+fields of the TABLE object rather than of the BalanceManager, and `listDynamicFields` on the
+BalanceManager returns zero, which reads exactly like an empty account and is really the wrong object.
+`balance_manager::balance<T>` is the settled side without saying so. The other half, the OWED
+balances, is per-account state in the POOL — DeepBook's own design note puts "settled balances (owed
+to user)" and "owed balances (owed by user)" on the pool's Account — so nothing reachable from the
+BalanceManager can see it. That is where an order's funds can sit after the order has left the book,
+and finding them needs DeepBook's SDK or an indexer rather than another simulation.
+
 ## Mainnet feature flags (protocol 136, read from the node)
 
 ```text
