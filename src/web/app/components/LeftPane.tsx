@@ -9,8 +9,6 @@ import { SourceAvatar } from '@/components/Avatar';
 import { PolicySheet } from '@/components/PolicySheet';
 import { ChatsPane } from '@/components/ChatsPane';
 import { TalentsPane } from '@/components/TalentsPane';
-import { StrategiesPane } from '@/components/StrategiesPane';
-import { GuardPane } from '@/components/GuardPane';
 
 /*
  * The left pane: what is installed, and what is left over.
@@ -338,13 +336,10 @@ export function LeftPane({
 
         {tab === 'talents' && (
           <div className="flex h-full flex-col">
-            {/* What the model can DO. */}
+            {/* What the model can DO — the deepbook grid among them, as a talent like any other.
+                Its card carries its own controls, so nothing is stacked below the list restating
+                what an entry above it already says. */}
             <TalentsPane />
-            {/* Both of these are capabilities rather than places in the app: one is a live account an
-                agent may trade inside limits, the other is the catalogue a maker points a guard at.
-                They were hidden for a demo; they belong in the pane that lists capabilities. */}
-            <StrategiesPane />
-            <GuardPane />
           </div>
         )}
 

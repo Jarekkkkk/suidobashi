@@ -3,6 +3,7 @@ import { Trash2, Check, ChevronDown } from 'lucide-react';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
+import { GuardPane } from '@/components/GuardPane';
 
 /*
  * The marketplace, and what is installed.
@@ -169,6 +170,11 @@ function TalentCard({ t, on, busy, manifest, onInstall, onRemove }: {
       <div className="mt-1.5 break-all font-mono text-[10px] text-muted-foreground">
         {t.server}
       </div>
+
+      {/* A talent that can be DRIVEN, not only installed. The grid's entire surface is its two
+          actions, so the card is where they belong — the same card in both sections, rather than a
+          second block below the list restating what the entry above already says. */}
+      {t.id === 'http://127.0.0.1:8792' && <GuardPane />}
     </li>
   );
 }
